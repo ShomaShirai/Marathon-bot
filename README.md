@@ -258,18 +258,16 @@ backend/
 
 ## ローカル起動
 
-仮想環境を作成して依存関係をインストールします。
+Docker を使って起動します。
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+make up
 ```
 
-FastAPI を起動します。
+ログを前面で見ながら開発する場合は、以下を使います。
 
 ```bash
-uvicorn backend.app.main:app --reload
+make dev
 ```
 
 ヘルスチェックを確認します。
@@ -282,6 +280,27 @@ curl http://127.0.0.1:8000/health
 
 ```json
 {"status":"ok"}
+```
+
+停止します。
+
+```bash
+make down
+```
+
+コンテナログを確認します。
+
+```bash
+make logs
+```
+
+Docker を使わずに起動する場合は、仮想環境を作成して依存関係をインストールします。
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn backend.app.main:app --reload
 ```
 
 ## 今後の実装ステップ

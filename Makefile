@@ -1,6 +1,7 @@
 SERVICE ?= api
+message ?= update database schema
 
-.PHONY: build up dev down logs shell
+.PHONY: build up dev down logs shell db-revision db-upgrade db-downgrade
 
 build:
 	docker compose build
@@ -19,3 +20,12 @@ logs:
 
 shell:
 	docker compose run --rm $(SERVICE) sh
+
+db-revision:
+	docker compose run --rm $(SERVICE) alembic revision --autogenerate -m "$(message)"
+
+db-upgrade:
+	docker compose run --rm $(SERVICE) alembic upgrade head
+
+db-downgrade:
+	docker compose run --rm $(SERVICE) alembic downgrade -1

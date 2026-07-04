@@ -252,9 +252,33 @@ backend/
 | --- | --- |
 | `SLACK_BOT_TOKEN` | Slack Bot User OAuth Token |
 | `SLACK_SIGNING_SECRET` | Slackリクエスト署名検証用のsecret |
-| `DATABASE_URL` | Turso DB 接続URL |
+| `DATABASE_URL` | DB接続URL。未設定時は `sqlite:///./local.db` |
 | `APP_BASE_URL` | Render上のアプリURL |
 | `JOB_SECRET` | GitHub Actions cron からジョブAPIを呼ぶためのsecret |
+
+## Database / Migration
+
+DBアクセスには SQLAlchemy を使い、migration には Alembic を使います。
+
+現時点では、Turso 固有の接続設定はまだ確定していません。ローカル開発では `DATABASE_URL` が未設定の場合、デフォルトで `sqlite:///./local.db` を使います。
+
+migration を作成します。
+
+```bash
+make db-revision message="create races"
+```
+
+migration を適用します。
+
+```bash
+make db-upgrade
+```
+
+直前のmigrationを戻します。
+
+```bash
+make db-downgrade
+```
 
 ## ローカル起動
 

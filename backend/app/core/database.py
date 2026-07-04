@@ -1,17 +1,44 @@
 import os
 
 from sqlalchemy import create_engine
+from sqlalchemy.engine import Engine
+from sqlalchemy.pool import Pool
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 DEFAULT_DATABASE_URL = "sqlite:///./local.db"
 
-DATABASE_URL = os.getenv("DATABASE_URL", DEFAULT_DATABASE_URL)
 
-connect_args = {}
-if DATABASE_URL.startswith("sqlite"):
-    connect_args = {"check_same_thread": False}
+def get_database_url() -> str:
+    turso_database_url = os.getenv("TURSO_DATABASE_URL")
+    turso_auth_token = os.getenv("TURSO_AUTH_TOKEN")
 
-engine = create_engine(DATABASE_URL, connect_args=connect_args)
+    if turso_database_url and turso_auth_token:
+        return f"sqlite+{turso_database_url}?secure=true"
+
+    return os.getenv("DATABASE_URL", DEFAULT_DATABASE_URL)
+
+
+def get_connect_args() -> dict[str, bool | str]:
+    database_url = get_database_url()
+
+    if database_url.startswith("sqlite+libsql"):
+        return {"auth_token": os.environ["TURSO_AUTH_TOKEN"]}
+
+    if database_url.startswith("sqlite"):
+        return {"check_same_thread": False}
+
+    return {}
+
+
+def create_database_engine(poolclass: type[Pool] | None = None) -> Engine:
+    engine_options = {"connect_args": get_connect_args()}
+    if poolclass is not None:
+        engine_options["poolclass"] = poolclass
+
+    return create_engine(get_database_url(), **engine_options)
+
+
+engine = create_database_engine()
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 

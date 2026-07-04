@@ -1,5 +1,5 @@
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from backend.app.models.race import Race
@@ -47,3 +47,24 @@ class RaceRepository:
             .limit(limit)
         )
         return list(self.db.scalars(statement))
+
+    def delete_by_id_for_slack_channel(
+        self,
+        *,
+        race_id: int,
+        slack_team_id: str,
+        slack_channel_id: str,
+    ) -> int:
+        try:
+            statement = (
+                delete(Race)
+                .where(Race.id == race_id)
+                .where(Race.slack_team_id == slack_team_id)
+                .where(Race.slack_channel_id == slack_channel_id)
+            )
+            result = self.db.execute(statement)
+            self.db.commit()
+            return result.rowcount or 0
+        except SQLAlchemyError:
+            self.rollback()
+            raise

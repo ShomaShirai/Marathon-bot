@@ -17,6 +17,10 @@ class InvalidRaceUrlError(ValueError):
     pass
 
 
+class InvalidRaceIdError(ValueError):
+    pass
+
+
 class RaceService:
     def __init__(self, db: Session) -> None:
         self.repository = RaceRepository(db)
@@ -78,6 +82,21 @@ class RaceService:
             limit=limit,
         )
 
+    def remove_by_id_for_slack_channel(
+        self,
+        *,
+        race_id_text: str,
+        slack_team_id: str,
+        slack_channel_id: str,
+    ) -> bool:
+        race_id = self._parse_race_id(race_id_text)
+        deleted_count = self.repository.delete_by_id_for_slack_channel(
+            race_id=race_id,
+            slack_team_id=slack_team_id,
+            slack_channel_id=slack_channel_id,
+        )
+        return deleted_count > 0
+
     def _normalize_url(self, url: str) -> tuple[str, str]:
         normalized_url = self._strip_slack_url_markup(url.strip())
         parsed_url = urlparse(normalized_url)
@@ -90,6 +109,17 @@ class RaceService:
             raise InvalidRaceUrlError("URLのドメインを取得できませんでした。")
 
         return normalized_url, source_domain.lower()
+
+    def _parse_race_id(self, race_id_text: str) -> int:
+        try:
+            race_id = int(race_id_text.strip())
+        except ValueError as exc:
+            raise InvalidRaceIdError("race_id は数値で指定してください。") from exc
+
+        if race_id <= 0:
+            raise InvalidRaceIdError("race_id は1以上の数値で指定してください。")
+
+        return race_id
 
     def _strip_slack_url_markup(self, url: str) -> str:
         if not url.startswith("<") or not url.endswith(">"):

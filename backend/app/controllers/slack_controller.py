@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from backend.app.core.config import get_env
 from backend.app.core.database import get_db
 from backend.app.core.security import verify_slack_signature
-from backend.app.services.race_service import InvalidRaceUrlError, RaceService
+from backend.app.services.race_service import InvalidRaceIdError, InvalidRaceUrlError, RaceService
 
 router = APIRouter(prefix="/slack", tags=["slack"])
 
@@ -87,9 +87,35 @@ async def handle_slack_command(
             "text": _build_list_response_text(races),
         }
 
+    if text.startswith("remove "):
+        race_id_text = text.removeprefix("remove ").strip()
+        race_service = RaceService(db)
+        try:
+            removed = race_service.remove_by_id_for_slack_channel(
+                race_id_text=race_id_text,
+                slack_team_id=slack_team_id,
+                slack_channel_id=slack_channel_id,
+            )
+        except InvalidRaceIdError as exc:
+            return {
+                "response_type": "ephemeral",
+                "text": str(exc),
+            }
+
+        if not removed:
+            return {
+                "response_type": "ephemeral",
+                "text": f"race_id={race_id_text} の大会は、このチャンネルには見つかりませんでした。",
+            }
+
+        return {
+            "response_type": "ephemeral",
+            "text": f"race_id={race_id_text} の大会を削除しました。",
+        }
+
     return {
         "response_type": "ephemeral",
-        "text": "使い方: /marathon add <大会URL> または /marathon list",
+        "text": "使い方: /marathon add <大会URL>、/marathon list、/marathon remove <race_id>",
     }
 
 

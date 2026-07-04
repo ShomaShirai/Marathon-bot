@@ -90,7 +90,7 @@ Slack App では以下を使います。
 /marathon remove <race_id>
 ```
 
-MVP では、まず `/marathon add <大会URL>` を優先します。登録されたチャンネルに対して、締め切り検出や締め切り前通知を送信します。
+MVP では、まず `/marathon add <大会URL>` を優先します。`add` はURLからページタイトルとドメインを取得し、`races` に保存します。登録されたチャンネルに対して、締め切り検出や締め切り前通知を送信します。
 
 Slack からのリクエストでは `SLACK_SIGNING_SECRET` を使って署名検証を行います。通知送信には `SLACK_BOT_TOKEN` を使います。
 

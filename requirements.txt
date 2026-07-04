@@ -3,3 +3,5 @@ uvicorn[standard]
 sqlalchemy
 alembic
 sqlalchemy-libsql
+requests
+beautifulsoup4

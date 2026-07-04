@@ -72,10 +72,20 @@ async def handle_slack_command(
 
         return {
             "response_type": "ephemeral",
-            "text": f"大会を登録しました: {race.title}\n{race.url}",
+            "text": _build_add_response_text(race),
         }
 
     return {
         "response_type": "ephemeral",
         "text": "使い方: /marathon add <大会URL>",
     }
+
+
+def _build_add_response_text(race: object) -> str:
+    title = getattr(race, "title")
+    entry_deadline = getattr(race, "entry_deadline")
+
+    if entry_deadline:
+        return f"大会を登録しました: {title}\n締切: {entry_deadline.date().isoformat()}"
+
+    return f"大会を登録しました: {title}\n締切はまだ検出できませんでした。"

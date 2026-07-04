@@ -10,10 +10,23 @@ class RaceRepository:
 
     def create(self, race: Race) -> Race:
         try:
-            self.db.add(race)
-            self.db.commit()
-            self.db.refresh(race)
+            self.add(race)
+            self.commit()
             return race
         except SQLAlchemyError:
-            self.db.rollback()
+            self.rollback()
             raise
+
+    def add(self, race: Race) -> Race:
+        self.db.add(race)
+        self.db.flush()
+        return race
+
+    def commit(self) -> None:
+        self.db.commit()
+
+    def rollback(self) -> None:
+        self.db.rollback()
+
+    def refresh(self, race: Race) -> None:
+        self.db.refresh(race)

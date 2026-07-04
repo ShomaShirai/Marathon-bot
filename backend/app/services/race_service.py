@@ -5,7 +5,11 @@ import requests
 from sqlalchemy.orm import Session
 
 from backend.app.models.race import Race
+from backend.app.repositories.race_event_repository import RaceEventRepository
 from backend.app.repositories.race_repository import RaceRepository
+from backend.app.services.deadline_detection_service import DeadlineDetectionService
+from backend.app.services.deadline_detection_service import DeadlineDetectionResult
+from backend.app.services.scraping_service import PageMetadata
 from backend.app.services.scraping_service import ScrapingService
 
 
@@ -16,7 +20,9 @@ class InvalidRaceUrlError(ValueError):
 class RaceService:
     def __init__(self, db: Session) -> None:
         self.repository = RaceRepository(db)
+        self.event_repository = RaceEventRepository(db)
         self.scraping_service = ScrapingService()
+        self.deadline_detection_service = DeadlineDetectionService()
 
     def register_from_url(
         self,
@@ -27,7 +33,10 @@ class RaceService:
         registered_by: str,
     ) -> Race:
         normalized_url, source_domain = self._normalize_url(url)
-        title = self._fetch_title(normalized_url, fallback=source_domain)
+        checked_at = datetime.now(UTC)
+        metadata, fetch_error = self._fetch_metadata(normalized_url)
+        title = self._select_title(metadata, fallback=source_domain)
+        detection = self._detect_deadline(metadata)
 
         race = Race(
             slack_team_id=slack_team_id,
@@ -36,10 +45,25 @@ class RaceService:
             title=title,
             url=normalized_url,
             source_domain=source_domain,
-            last_checked_at=datetime.now(UTC),
+            entry_deadline=detection.entry_deadline,
+            entry_status=detection.entry_status,
+            last_checked_at=checked_at,
+            last_detected_text=detection.detected_text,
         )
 
-        return self.repository.create(race)
+        try:
+            self.repository.add(race)
+            self._record_registration_event(
+                race=race,
+                detection=detection,
+                fetch_error=fetch_error,
+            )
+            self.repository.commit()
+            self.repository.refresh(race)
+            return race
+        except Exception:
+            self.repository.rollback()
+            raise
 
     def _normalize_url(self, url: str) -> tuple[str, str]:
         normalized_url = self._strip_slack_url_markup(url.strip())
@@ -61,13 +85,56 @@ class RaceService:
         inner_url = url[1:-1]
         return inner_url.split("|", maxsplit=1)[0]
 
-    def _fetch_title(self, url: str, *, fallback: str) -> str:
+    def _fetch_metadata(self, url: str) -> tuple[PageMetadata | None, str | None]:
         try:
-            metadata = self.scraping_service.fetch_metadata(url)
-        except requests.RequestException:
-            return fallback
+            return self.scraping_service.fetch_metadata(url), None
+        except requests.RequestException as exc:
+            return None, str(exc)
 
+    def _select_title(self, metadata: PageMetadata | None, *, fallback: str) -> str:
+        if metadata is None:
+            return fallback
         if not metadata.title:
             return fallback
 
         return metadata.title[:255]
+
+    def _detect_deadline(self, metadata: PageMetadata | None) -> DeadlineDetectionResult:
+        if metadata is None:
+            return DeadlineDetectionResult(
+                entry_deadline=None,
+                entry_status="unknown",
+                detected_text=None,
+            )
+
+        return self.deadline_detection_service.detect(metadata.text)
+
+    def _record_registration_event(
+        self,
+        *,
+        race: Race,
+        detection: DeadlineDetectionResult,
+        fetch_error: str | None,
+    ) -> None:
+        if fetch_error:
+            self.event_repository.add(
+                race_id=race.id,
+                event_type="check_failed",
+                new_value=fetch_error,
+            )
+            return
+
+        if detection.entry_deadline:
+            self.event_repository.add(
+                race_id=race.id,
+                event_type="deadline_detected",
+                new_value=detection.entry_deadline.isoformat(),
+            )
+            return
+
+        if detection.entry_status == "closed":
+            self.event_repository.add(
+                race_id=race.id,
+                event_type="entry_closed",
+                new_value=detection.detected_text,
+            )

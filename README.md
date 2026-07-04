@@ -256,6 +256,34 @@ backend/
 | `APP_BASE_URL` | Render上のアプリURL |
 | `JOB_SECRET` | GitHub Actions cron からジョブAPIを呼ぶためのsecret |
 
+## ローカル起動
+
+仮想環境を作成して依存関係をインストールします。
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+FastAPI を起動します。
+
+```bash
+uvicorn backend.app.main:app --reload
+```
+
+ヘルスチェックを確認します。
+
+```bash
+curl http://127.0.0.1:8000/health
+```
+
+期待するレスポンス:
+
+```json
+{"status":"ok"}
+```
+
 ## 今後の実装ステップ
 
 1. FastAPI の最小構成を作成する。

@@ -65,6 +65,19 @@ class RaceService:
             self.repository.rollback()
             raise
 
+    def list_by_slack_channel(
+        self,
+        *,
+        slack_team_id: str,
+        slack_channel_id: str,
+        limit: int = 20,
+    ) -> list[Race]:
+        return self.repository.list_by_slack_channel(
+            slack_team_id=slack_team_id,
+            slack_channel_id=slack_channel_id,
+            limit=limit,
+        )
+
     def _normalize_url(self, url: str) -> tuple[str, str]:
         normalized_url = self._strip_slack_url_markup(url.strip())
         parsed_url = urlparse(normalized_url)

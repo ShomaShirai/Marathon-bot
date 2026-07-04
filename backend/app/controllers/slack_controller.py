@@ -75,9 +75,21 @@ async def handle_slack_command(
             "text": _build_add_response_text(race),
         }
 
+    if text == "list":
+        race_service = RaceService(db)
+        races = race_service.list_by_slack_channel(
+            slack_team_id=slack_team_id,
+            slack_channel_id=slack_channel_id,
+        )
+
+        return {
+            "response_type": "ephemeral",
+            "text": _build_list_response_text(races),
+        }
+
     return {
         "response_type": "ephemeral",
-        "text": "使い方: /marathon add <大会URL>",
+        "text": "使い方: /marathon add <大会URL> または /marathon list",
     }
 
 
@@ -89,3 +101,21 @@ def _build_add_response_text(race: object) -> str:
         return f"大会を登録しました: {title}\n締切: {entry_deadline.date().isoformat()}"
 
     return f"大会を登録しました: {title}\n締切はまだ検出できませんでした。"
+
+
+def _build_list_response_text(races: list[object]) -> str:
+    if not races:
+        return "このチャンネルには、まだ大会が登録されていません。"
+
+    lines = ["登録済みの大会:"]
+    for race in races:
+        race_id = getattr(race, "id")
+        title = getattr(race, "title")
+        url = getattr(race, "url")
+        entry_deadline = getattr(race, "entry_deadline")
+        entry_status = getattr(race, "entry_status") or "unknown"
+
+        deadline_text = entry_deadline.date().isoformat() if entry_deadline else "未検出"
+        lines.append(f"{race_id}. {title} / 締切: {deadline_text} / 状態: {entry_status}\n{url}")
+
+    return "\n".join(lines)

@@ -1,4 +1,5 @@
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.app.models.race import Race
@@ -30,3 +31,19 @@ class RaceRepository:
 
     def refresh(self, race: Race) -> None:
         self.db.refresh(race)
+
+    def list_by_slack_channel(
+        self,
+        *,
+        slack_team_id: str,
+        slack_channel_id: str,
+        limit: int = 20,
+    ) -> list[Race]:
+        statement = (
+            select(Race)
+            .where(Race.slack_team_id == slack_team_id)
+            .where(Race.slack_channel_id == slack_channel_id)
+            .order_by(Race.created_at.desc())
+            .limit(limit)
+        )
+        return list(self.db.scalars(statement))

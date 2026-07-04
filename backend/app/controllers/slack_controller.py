@@ -121,12 +121,19 @@ async def handle_slack_command(
 
 def _build_add_response_text(race: object) -> str:
     title = getattr(race, "title")
+    entry_start_at = getattr(race, "entry_start_at")
     entry_deadline = getattr(race, "entry_deadline")
+    lines = [f"大会を登録しました: {title}"]
+
+    if entry_start_at:
+        lines.append(f"エントリー開始: {entry_start_at.date().isoformat()}")
 
     if entry_deadline:
-        return f"大会を登録しました: {title}\n締切: {entry_deadline.date().isoformat()}"
+        lines.append(f"締切: {entry_deadline.date().isoformat()}")
+    else:
+        lines.append("締切はまだ検出できませんでした。")
 
-    return f"大会を登録しました: {title}\n締切はまだ検出できませんでした。"
+    return "\n".join(lines)
 
 
 def _build_list_response_text(races: list[object]) -> str:
@@ -138,10 +145,14 @@ def _build_list_response_text(races: list[object]) -> str:
         race_id = getattr(race, "id")
         title = getattr(race, "title")
         url = getattr(race, "url")
+        entry_start_at = getattr(race, "entry_start_at")
         entry_deadline = getattr(race, "entry_deadline")
         entry_status = getattr(race, "entry_status") or "unknown"
 
+        start_text = entry_start_at.date().isoformat() if entry_start_at else "未検出"
         deadline_text = entry_deadline.date().isoformat() if entry_deadline else "未検出"
-        lines.append(f"{race_id}. {title} / 締切: {deadline_text} / 状態: {entry_status}\n{url}")
+        lines.append(
+            f"{race_id}. {title} / 開始: {start_text} / 締切: {deadline_text} / 状態: {entry_status}\n{url}"
+        )
 
     return "\n".join(lines)

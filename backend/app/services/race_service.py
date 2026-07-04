@@ -49,6 +49,7 @@ class RaceService:
             title=title,
             url=normalized_url,
             source_domain=source_domain,
+            entry_start_at=detection.entry_start_at,
             entry_deadline=detection.entry_deadline,
             entry_status=detection.entry_status,
             last_checked_at=checked_at,
@@ -145,6 +146,7 @@ class RaceService:
     def _detect_deadline(self, metadata: PageMetadata | None) -> DeadlineDetectionResult:
         if metadata is None:
             return DeadlineDetectionResult(
+                entry_start_at=None,
                 entry_deadline=None,
                 entry_status="unknown",
                 detected_text=None,

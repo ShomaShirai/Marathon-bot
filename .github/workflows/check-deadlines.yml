@@ -1,0 +1,19 @@
+name: Check marathon deadlines
+
+on:
+  schedule:
+    - cron: "0 22 * * *"
+  workflow_dispatch:
+
+jobs:
+  check-deadlines:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call deadline check job
+        run: |
+          curl --fail-with-body \
+            -X POST "${APP_BASE_URL}/jobs/check-deadlines" \
+            -H "Authorization: Bearer ${JOB_SECRET}"
+        env:
+          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
+          JOB_SECRET: ${{ secrets.JOB_SECRET }}

@@ -14,7 +14,8 @@ class Notification(Base):
         UniqueConstraint(
             "race_id",
             "notification_type",
-            name="uq_notifications_race_id_notification_type",
+            "dedupe_key",
+            name="uq_notifications_race_id_notification_type_dedupe_key",
         ),
     )
 
@@ -25,6 +26,7 @@ class Notification(Base):
         index=True,
     )
     notification_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    dedupe_key: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     sent_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

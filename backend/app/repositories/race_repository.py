@@ -48,6 +48,10 @@ class RaceRepository:
         )
         return list(self.db.scalars(statement))
 
+    def list_all(self) -> list[Race]:
+        statement = select(Race).order_by(Race.id.asc())
+        return list(self.db.scalars(statement))
+
     def delete_by_id_for_slack_channel(
         self,
         *,

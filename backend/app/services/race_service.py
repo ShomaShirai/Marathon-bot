@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import UTC, datetime, time
 import logging
 from urllib.parse import urlparse
@@ -25,6 +26,14 @@ JST = ZoneInfo("Asia/Tokyo")
 PAGE_STATUS_AVAILABLE = "available"
 PAGE_STATUS_PENDING = "pending"
 PAGE_STATUS_ERROR = "error"
+
+
+@dataclass(frozen=True)
+class RaceCheckResult:
+    race: Race
+    changed: bool
+    failed: bool
+    notification_events: tuple[str, ...]
 
 
 class InvalidRaceUrlError(ValueError):
@@ -120,6 +129,118 @@ class RaceService:
         )
         return deleted_count > 0
 
+    def check_registered_race(self, race: Race) -> RaceCheckResult:
+        checked_at = datetime.now(UTC)
+        old_entry_start_at = race.entry_start_at
+        old_entry_deadline = race.entry_deadline
+        old_entry_status = race.entry_status
+        old_page_status = race.page_status
+        old_content_hash = race.last_content_hash
+        old_extraction_method = race.last_extraction_method
+        old_detected_text = race.last_detected_text
+
+        metadata, detection, fetch_error, page_status = self._fetch_metadata_and_detect(race.url)
+        notification_events: list[str] = []
+
+        race.last_checked_at = checked_at
+        race.page_status = page_status
+
+        if fetch_error:
+            self.event_repository.add(
+                race_id=race.id,
+                event_type="page_pending" if page_status == PAGE_STATUS_PENDING else "check_failed",
+                new_value=fetch_error,
+            )
+            self.repository.commit()
+            self.repository.refresh(race)
+            return RaceCheckResult(
+                race=race,
+                changed=old_page_status != race.page_status,
+                failed=True,
+                notification_events=(),
+            )
+
+        if old_page_status in {PAGE_STATUS_PENDING, PAGE_STATUS_ERROR} and page_status == PAGE_STATUS_AVAILABLE:
+            self.event_repository.add(
+                race_id=race.id,
+                event_type="page_available",
+                old_value=old_page_status,
+                new_value=page_status,
+            )
+
+        if old_content_hash and metadata and old_content_hash != metadata.content_hash:
+            self.event_repository.add(
+                race_id=race.id,
+                event_type="page_changed",
+                old_value=old_content_hash,
+                new_value=metadata.content_hash,
+            )
+
+        old_schedule_key = self._schedule_key(
+            entry_start_at=old_entry_start_at,
+            entry_deadline=old_entry_deadline,
+        )
+        new_schedule_key = self._schedule_key(
+            entry_start_at=detection.entry_start_at,
+            entry_deadline=detection.entry_deadline,
+        )
+
+        had_old_schedule = old_entry_start_at is not None or old_entry_deadline is not None
+        has_new_schedule = detection.entry_start_at is not None or detection.entry_deadline is not None
+        if has_new_schedule and not had_old_schedule:
+            self.event_repository.add(
+                race_id=race.id,
+                event_type="entry_schedule_detected",
+                old_value=old_schedule_key,
+                new_value=new_schedule_key,
+            )
+            notification_events.append("entry_schedule_detected")
+        elif has_new_schedule and old_schedule_key != new_schedule_key:
+            self.event_repository.add(
+                race_id=race.id,
+                event_type="entry_schedule_changed",
+                old_value=old_schedule_key,
+                new_value=new_schedule_key,
+            )
+            notification_events.append("entry_schedule_changed")
+
+        if detection.entry_status == "closed" and old_entry_status != "closed":
+            self.event_repository.add(
+                race_id=race.id,
+                event_type="entry_closed",
+                old_value=old_entry_status,
+                new_value=detection.detected_text,
+            )
+
+        race.title = self._select_title(metadata, fallback=race.title)
+        race.entry_start_at = detection.entry_start_at
+        race.entry_deadline = detection.entry_deadline
+        race.entry_status = detection.entry_status
+        race.last_content_hash = metadata.content_hash if metadata else None
+        race.last_extraction_method = self._select_extraction_method(detection)
+        race.last_detected_text = detection.detected_text
+
+        changed = any(
+            (
+                old_entry_start_at != race.entry_start_at,
+                old_entry_deadline != race.entry_deadline,
+                old_entry_status != race.entry_status,
+                old_page_status != race.page_status,
+                old_content_hash != race.last_content_hash,
+                old_extraction_method != race.last_extraction_method,
+                old_detected_text != race.last_detected_text,
+            )
+        )
+
+        self.repository.commit()
+        self.repository.refresh(race)
+        return RaceCheckResult(
+            race=race,
+            changed=changed,
+            failed=False,
+            notification_events=tuple(notification_events),
+        )
+
     def _normalize_url(self, url: str) -> tuple[str, str]:
         normalized_url = self._strip_slack_url_markup(url.strip())
         parsed_url = urlparse(normalized_url)
@@ -150,6 +271,16 @@ class RaceService:
 
         inner_url = url[1:-1]
         return inner_url.split("|", maxsplit=1)[0]
+
+    def _schedule_key(
+        self,
+        *,
+        entry_start_at: datetime | None,
+        entry_deadline: datetime | None,
+    ) -> str:
+        start_text = entry_start_at.isoformat() if entry_start_at else "-"
+        deadline_text = entry_deadline.isoformat() if entry_deadline else "-"
+        return f"start={start_text};deadline={deadline_text}"
 
     def _fetch_metadata_and_detect(
         self,

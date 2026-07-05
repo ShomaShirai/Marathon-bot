@@ -369,30 +369,3 @@ make down
 ```bash
 make logs
 ```
-
-Docker を使わずに起動する場合は、仮想環境を作成して依存関係をインストールします。
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-playwright install chromium
-uvicorn backend.app.main:app --reload
-```
-
-## 今後の実装ステップ
-
-1. FastAPI の最小構成を作成する。
-2. SQLAlchemy と Alembic を導入する。
-3. Turso DB 接続を設定する。
-4. `races`, `race_events`, `notifications` の migration を作成する。
-5. `/health` を実装する。
-6. Slack Slash Command の署名検証と受信処理を実装する。
-7. `/marathon add <URL>` で大会を登録できるようにする。
-8. requests + BeautifulSoup のスクレイピング処理を実装する。
-9. 締め切り検出とイベント記録を実装する。
-10. Playwright によるレンダリング後DOM取得のフォールバックを実装する。
-11. OpenAI API による画像解析フォールバックを実装する。
-12. Slack 通知送信を実装する。
-13. GitHub Actions cron から `/jobs/check-deadlines` を呼び出す。
-14. Render にデプロイする。

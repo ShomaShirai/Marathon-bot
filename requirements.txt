@@ -5,3 +5,5 @@ alembic
 sqlalchemy-libsql
 requests
 beautifulsoup4
+playwright
+openai

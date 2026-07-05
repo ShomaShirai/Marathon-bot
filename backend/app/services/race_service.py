@@ -11,6 +11,8 @@ from backend.app.repositories.race_event_repository import RaceEventRepository
 from backend.app.repositories.race_repository import RaceRepository
 from backend.app.services.deadline_detection_service import DeadlineDetectionService
 from backend.app.services.deadline_detection_service import DeadlineDetectionResult
+from backend.app.services.openai_image_analysis_service import OpenAIImageAnalysisService
+from backend.app.services.rendered_scraping_service import RenderedScrapingService
 from backend.app.services.scraping_service import PageMetadata
 from backend.app.services.scraping_service import ScrapingService
 
@@ -31,6 +33,8 @@ class RaceService:
         self.repository = RaceRepository(db)
         self.event_repository = RaceEventRepository(db)
         self.scraping_service = ScrapingService()
+        self.rendered_scraping_service = RenderedScrapingService()
+        self.openai_image_analysis_service = OpenAIImageAnalysisService()
         self.deadline_detection_service = DeadlineDetectionService()
 
     def register_from_url(
@@ -43,9 +47,8 @@ class RaceService:
     ) -> Race:
         normalized_url, source_domain = self._normalize_url(url)
         checked_at = datetime.now(UTC)
-        metadata, fetch_error = self._fetch_metadata(normalized_url)
+        metadata, detection, fetch_error = self._fetch_metadata_and_detect(normalized_url)
         title = self._select_title(metadata, fallback=source_domain)
-        detection = self._detect_deadline(metadata)
 
         race = Race(
             slack_team_id=slack_team_id,
@@ -58,6 +61,7 @@ class RaceService:
             entry_deadline=detection.entry_deadline,
             entry_status=detection.entry_status,
             last_checked_at=checked_at,
+            last_content_hash=metadata.content_hash if metadata else None,
             last_detected_text=detection.detected_text,
         )
 
@@ -134,10 +138,45 @@ class RaceService:
         inner_url = url[1:-1]
         return inner_url.split("|", maxsplit=1)[0]
 
-    def _fetch_metadata(self, url: str) -> tuple[PageMetadata | None, str | None]:
+    def _fetch_metadata_and_detect(
+        self,
+        url: str,
+    ) -> tuple[PageMetadata | None, DeadlineDetectionResult, str | None]:
+        static_metadata, static_error = self._fetch_static_metadata(url)
+        static_detection = self._detect_deadline(static_metadata)
+        if self._is_detection_complete(static_detection):
+            return static_metadata, static_detection, None
+
+        rendered_metadata, rendered_error = self._fetch_rendered_metadata(url)
+        rendered_detection = self._detect_deadline(rendered_metadata)
+        if self._is_detection_complete(rendered_detection):
+            return rendered_metadata, rendered_detection, None
+
+        image_metadata = rendered_metadata or static_metadata
+        image_detection = self._detect_deadline_from_images(image_metadata)
+        if image_detection is not None:
+            return image_metadata, image_detection, None
+
+        if rendered_metadata is not None:
+            return rendered_metadata, rendered_detection, None
+
+        if static_metadata is not None:
+            return static_metadata, static_detection, None
+
+        fetch_error = static_error or rendered_error or "failed to fetch page metadata"
+        return None, static_detection, fetch_error
+
+    def _fetch_static_metadata(self, url: str) -> tuple[PageMetadata | None, str | None]:
         try:
             return self.scraping_service.fetch_metadata(url), None
         except requests.RequestException as exc:
+            return None, str(exc)
+
+    def _fetch_rendered_metadata(self, url: str) -> tuple[PageMetadata | None, str | None]:
+        try:
+            return self.rendered_scraping_service.fetch_metadata(url), None
+        except Exception as exc:
+            logger.warning("playwright scraping failed url=%s error=%s", url, exc)
             return None, str(exc)
 
     def _select_title(self, metadata: PageMetadata | None, *, fallback: str) -> str:
@@ -161,6 +200,38 @@ class RaceService:
         self._log_local_scraping_detection(metadata=metadata, detection=detection)
         return detection
 
+    def _detect_deadline_from_images(
+        self,
+        metadata: PageMetadata | None,
+    ) -> DeadlineDetectionResult | None:
+        if metadata is None:
+            return None
+
+        try:
+            image_analysis = self.openai_image_analysis_service.analyze(metadata)
+        except Exception as exc:
+            logger.warning("openai image analysis failed source=%s error=%s", metadata.source_method, exc)
+            return None
+
+        if image_analysis is None:
+            return None
+
+        image_metadata = PageMetadata(
+            title=metadata.title,
+            text=image_analysis.detected_text,
+            image_urls=metadata.image_urls,
+            images=metadata.images,
+            source_method="openai_vision",
+            screenshot_base64=metadata.screenshot_base64,
+            content_hash=metadata.content_hash,
+        )
+        detection = self.deadline_detection_service.detect(image_metadata.text)
+        self._log_local_scraping_detection(metadata=image_metadata, detection=detection)
+        return detection
+
+    def _is_detection_complete(self, detection: DeadlineDetectionResult) -> bool:
+        return detection.entry_deadline is not None or detection.entry_status == "closed"
+
     def _log_local_scraping_detection(
         self,
         *,
@@ -171,7 +242,8 @@ class RaceService:
             return
 
         logger.info(
-            "[local scraping] detection input title=%r text_excerpt=%r",
+            "[local scraping] detection input source=%s title=%r text_excerpt=%r",
+            metadata.source_method,
             metadata.title,
             metadata.text[:SCRAPING_LOG_TEXT_LIMIT],
         )

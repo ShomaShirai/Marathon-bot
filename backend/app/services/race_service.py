@@ -17,6 +17,7 @@ from backend.app.services.openai_image_analysis_service import ImageAnalysisResu
 from backend.app.services.rendered_scraping_service import RenderedScrapingService
 from backend.app.services.scraping_service import PageMetadata
 from backend.app.services.scraping_service import ScrapingService
+from backend.app.services.site_extractors.chiba_aqualine_marathon_extractor import ChibaAqualineMarathonExtractor
 
 logger = logging.getLogger(__name__)
 SCRAPING_LOG_TEXT_LIMIT = 2000
@@ -42,6 +43,9 @@ class RaceService:
         self.rendered_scraping_service = RenderedScrapingService()
         self.openai_image_analysis_service = OpenAIImageAnalysisService()
         self.deadline_detection_service = DeadlineDetectionService()
+        self.site_extractors = [
+            ChibaAqualineMarathonExtractor(self.deadline_detection_service),
+        ]
 
     def register_from_url(
         self,
@@ -152,7 +156,7 @@ class RaceService:
         url: str,
     ) -> tuple[PageMetadata | None, DeadlineDetectionResult, str | None, str]:
         static_metadata, static_error, static_page_status = self._fetch_static_metadata(url)
-        static_detection = self._detect_deadline(static_metadata)
+        static_detection = self._detect_deadline(static_metadata, url=url)
         if static_page_status == PAGE_STATUS_PENDING:
             return None, static_detection, static_error, PAGE_STATUS_PENDING
 
@@ -160,7 +164,7 @@ class RaceService:
             return static_metadata, static_detection, None, PAGE_STATUS_AVAILABLE
 
         rendered_metadata, rendered_error = self._fetch_rendered_metadata(url)
-        rendered_detection = self._detect_deadline(rendered_metadata)
+        rendered_detection = self._detect_deadline(rendered_metadata, url=url)
         if self._is_detection_complete(rendered_detection):
             return rendered_metadata, rendered_detection, None, PAGE_STATUS_AVAILABLE
 
@@ -214,7 +218,7 @@ class RaceService:
 
         return metadata.title[:255]
 
-    def _detect_deadline(self, metadata: PageMetadata | None) -> DeadlineDetectionResult:
+    def _detect_deadline(self, metadata: PageMetadata | None, *, url: str | None = None) -> DeadlineDetectionResult:
         if metadata is None:
             return DeadlineDetectionResult(
                 entry_start_at=None,
@@ -223,9 +227,33 @@ class RaceService:
                 detected_text=None,
             )
 
+        site_detection = self._detect_deadline_with_site_extractor(metadata=metadata, url=url)
+        if site_detection is not None:
+            self._log_local_scraping_detection(metadata=metadata, detection=site_detection)
+            return site_detection
+
         detection = self.deadline_detection_service.detect(metadata.text)
         self._log_local_scraping_detection(metadata=metadata, detection=detection)
         return detection
+
+    def _detect_deadline_with_site_extractor(
+        self,
+        *,
+        metadata: PageMetadata,
+        url: str | None,
+    ) -> DeadlineDetectionResult | None:
+        if url is None:
+            return None
+
+        for extractor in self.site_extractors:
+            if not extractor.supports(url):
+                continue
+
+            detection = extractor.detect(metadata.text)
+            if detection is not None:
+                return detection
+
+        return None
 
     def _detect_deadline_from_images(
         self,

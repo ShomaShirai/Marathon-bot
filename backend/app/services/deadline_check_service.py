@@ -15,14 +15,14 @@ logger = logging.getLogger(__name__)
 
 JST = ZoneInfo("Asia/Tokyo")
 ENTRY_START_NOTIFICATION_TYPES = {
-    30: "entry_start_30_days_before",
-    14: "entry_start_14_days_before",
-    7: "entry_start_7_days_before",
+    range(15, 31): "entry_start_30_days_before",
+    range(8, 15): "entry_start_14_days_before",
+    range(0, 8): "entry_start_7_days_before",
 }
 ENTRY_DEADLINE_NOTIFICATION_TYPES = {
-    30: "entry_deadline_30_days_before",
-    14: "entry_deadline_14_days_before",
-    7: "entry_deadline_7_days_before",
+    range(15, 31): "entry_deadline_30_days_before",
+    range(8, 15): "entry_deadline_14_days_before",
+    range(0, 8): "entry_deadline_7_days_before",
 }
 
 
@@ -153,7 +153,10 @@ class DeadlineCheckService:
         if race.entry_start_at is not None:
             start_date = race.entry_start_at.date()
             days_until_start = (start_date - today).days
-            notification_type = ENTRY_START_NOTIFICATION_TYPES.get(days_until_start)
+            notification_type = self._notification_type_for_days_until(
+                days_until=days_until_start,
+                notification_ranges=ENTRY_START_NOTIFICATION_TYPES,
+            )
             if notification_type is not None:
                 candidates.append(
                     NotificationCandidate(
@@ -165,7 +168,10 @@ class DeadlineCheckService:
         if race.entry_deadline is not None:
             deadline_date = race.entry_deadline.date()
             days_until_deadline = (deadline_date - today).days
-            notification_type = ENTRY_DEADLINE_NOTIFICATION_TYPES.get(days_until_deadline)
+            notification_type = self._notification_type_for_days_until(
+                days_until=days_until_deadline,
+                notification_ranges=ENTRY_DEADLINE_NOTIFICATION_TYPES,
+            )
             if notification_type is not None:
                 candidates.append(
                     NotificationCandidate(
@@ -175,6 +181,18 @@ class DeadlineCheckService:
                 )
 
         return candidates
+
+    def _notification_type_for_days_until(
+        self,
+        *,
+        days_until: int,
+        notification_ranges: dict[range, str],
+    ) -> str | None:
+        for notification_range, notification_type in notification_ranges.items():
+            if days_until in notification_range:
+                return notification_type
+
+        return None
 
     def _schedule_key(self, race: Race) -> str:
         start_text = race.entry_start_at.isoformat() if race.entry_start_at else "-"

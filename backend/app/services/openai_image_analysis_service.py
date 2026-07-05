@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import logging
 import re
 
 from backend.app.core.config import get_env
 from backend.app.services.scraping_service import PageImage
 from backend.app.services.scraping_service import PageMetadata
 
+logger = logging.getLogger(__name__)
 DEFAULT_OPENAI_VISION_MODEL = "gpt-4o-mini"
 DEFAULT_OPENAI_VISION_MAX_IMAGES = 3
 IMAGE_RELEVANCE_KEYWORDS = (
@@ -40,31 +42,40 @@ class OpenAIImageAnalysisService:
         if not image_inputs:
             return None
 
+        from openai import APIStatusError
         from openai import OpenAI
+        from openai import RateLimitError
 
-        client = OpenAI(api_key=get_env("OPENAI_API_KEY"))
-        response = client.responses.create(
-            model=self._get_model(),
-            input=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "input_text",
-                            "text": (
-                                "画像から日本語のマラソン大会エントリー情報を抽出してください。"
-                                "対象はエントリー開始、申込開始、エントリー締切、申込締切、"
-                                "募集締切、受付終了、申込期間、エントリー期間だけです。"
-                                "通知文は作らず、根拠として読めた文字列だけを返してください。"
-                                "JSON形式で {\"detected_text\": \"...\"} のみを返してください。"
-                                "該当情報がない場合は detected_text を空文字にしてください。"
-                            ),
-                        },
-                        *image_inputs,
-                    ],
-                }
-            ],
-        )
+        client = OpenAI(api_key=get_env("OPENAI_API_KEY"), max_retries=0)
+        try:
+            response = client.responses.create(
+                model=self._get_model(),
+                input=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_text",
+                                "text": (
+                                    "画像から日本語のマラソン大会エントリー情報を抽出してください。"
+                                    "対象はエントリー開始、申込開始、エントリー締切、申込締切、"
+                                    "募集締切、受付終了、申込期間、エントリー期間だけです。"
+                                    "通知文は作らず、根拠として読めた文字列だけを返してください。"
+                                    "JSON形式で {\"detected_text\": \"...\"} のみを返してください。"
+                                    "該当情報がない場合は detected_text を空文字にしてください。"
+                                ),
+                            },
+                            *image_inputs,
+                        ],
+                    }
+                ],
+            )
+        except RateLimitError as exc:
+            logger.warning("openai image analysis skipped due to rate limit or quota: %s", self._format_api_error(exc))
+            return None
+        except APIStatusError as exc:
+            logger.warning("openai image analysis skipped due to api error: %s", self._format_api_error(exc))
+            return None
 
         detected_text = self._parse_detected_text(response.output_text)
         if not detected_text:
@@ -141,3 +152,20 @@ class OpenAIImageAnalysisService:
             return text
 
         return match.group(1)
+
+    def _format_api_error(self, exc: Exception) -> str:
+        status_code = getattr(exc, "status_code", None)
+        code = None
+        body = getattr(exc, "body", None)
+        if isinstance(body, dict):
+            error = body.get("error")
+            if isinstance(error, dict):
+                code = error.get("code")
+
+        if status_code and code:
+            return f"status={status_code} code={code}"
+
+        if status_code:
+            return f"status={status_code}"
+
+        return exc.__class__.__name__

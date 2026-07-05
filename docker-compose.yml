@@ -15,6 +15,10 @@ services:
       JOB_SECRET: ${JOB_SECRET:-change-me}
       TURSO_DATABASE_URL: ${TURSO_DATABASE_URL:-}
       TURSO_AUTH_TOKEN: ${TURSO_AUTH_TOKEN:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ENABLE_LLM_IMAGE_ANALYSIS: ${ENABLE_LLM_IMAGE_ANALYSIS:-true}
+      OPENAI_VISION_MODEL: ${OPENAI_VISION_MODEL:-gpt-4o-mini}
+      OPENAI_VISION_MAX_IMAGES: ${OPENAI_VISION_MAX_IMAGES:-3}
     volumes:
       - .:/app
     command: uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --reload

@@ -21,7 +21,10 @@ KEYWORDS = (
 )
 PERIOD_KEYWORDS = {"申込期間", "エントリー期間"}
 START_KEYWORDS = {"エントリー開始", "申込開始", "申し込み開始", "受付開始", "募集開始"}
+EVENT_DATE_KEYWORDS = ("開催日", "開催", "大会日", "大会当日", "実施日")
 WINDOW_SIZE = 120
+EVENT_DATE_CONTEXT_SIZE = 40
+ENTRY_DATE_CONTEXT_KEYWORDS = KEYWORDS
 
 
 @dataclass(frozen=True)
@@ -74,12 +77,17 @@ class DeadlineDetectionService:
                 base_offset=window_start,
                 now=now_jst,
             )
+            entry_candidates = self._exclude_event_date_candidates(
+                window_text=window_text,
+                base_offset=window_start,
+                candidates=candidates,
+            )
 
-            if keyword == "受付終了" and not candidates:
+            if keyword == "受付終了" and not entry_candidates:
                 closed_detected_text = window_text[:500]
                 continue
 
-            selected = self._select_candidates(keyword, keyword_start, candidates)
+            selected = self._select_candidates(keyword, keyword_start, entry_candidates)
             if selected is None:
                 continue
 
@@ -170,6 +178,68 @@ class DeadlineDetectionService:
                 )
 
         return sorted(candidates, key=lambda candidate: candidate.start)
+
+    def _exclude_event_date_candidates(
+        self,
+        *,
+        window_text: str,
+        base_offset: int,
+        candidates: list[DateCandidate],
+    ) -> list[DateCandidate]:
+        entry_candidates = [
+            candidate
+            for candidate in candidates
+            if not self._is_event_date_candidate(
+                window_text=window_text,
+                base_offset=base_offset,
+                candidate=candidate,
+            )
+        ]
+        return entry_candidates
+
+    def _is_event_date_candidate(
+        self,
+        *,
+        window_text: str,
+        base_offset: int,
+        candidate: DateCandidate,
+    ) -> bool:
+        local_start = candidate.start - base_offset
+        local_end = candidate.end - base_offset
+        context_start = max(0, local_start - EVENT_DATE_CONTEXT_SIZE)
+        context_end = min(len(window_text), local_end + EVENT_DATE_CONTEXT_SIZE)
+        before_context = window_text[context_start:local_start]
+        after_context = window_text[local_end:context_end]
+
+        return self._has_closer_event_keyword_before(before_context) or self._has_event_keyword_before_entry_keyword_after(
+            after_context
+        )
+
+    def _has_closer_event_keyword_before(self, context: str) -> bool:
+        event_position = self._last_keyword_position(context, EVENT_DATE_KEYWORDS)
+        if event_position < 0:
+            return False
+
+        entry_position = self._last_keyword_position(context, ENTRY_DATE_CONTEXT_KEYWORDS)
+        return event_position > entry_position
+
+    def _has_event_keyword_before_entry_keyword_after(self, context: str) -> bool:
+        event_position = self._first_keyword_position(context, EVENT_DATE_KEYWORDS)
+        if event_position < 0:
+            return False
+
+        entry_position = self._first_keyword_position(context, ENTRY_DATE_CONTEXT_KEYWORDS)
+        return entry_position < 0 or event_position < entry_position
+
+    def _last_keyword_position(self, text: str, keywords: tuple[str, ...]) -> int:
+        return max((text.rfind(keyword) for keyword in keywords), default=-1)
+
+    def _first_keyword_position(self, text: str, keywords: tuple[str, ...]) -> int:
+        positions = [text.find(keyword) for keyword in keywords if text.find(keyword) >= 0]
+        if not positions:
+            return -1
+
+        return min(positions)
 
     def _overlaps_existing_span(
         self,

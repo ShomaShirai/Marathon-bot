@@ -4,15 +4,20 @@ from dataclasses import dataclass
 from datetime import datetime
 import json
 import logging
+import math
 import re
 
 from backend.app.core.config import get_env
 from backend.app.services.scraping_service import PageImage
 from backend.app.services.scraping_service import PageMetadata
+from backend.app.services.scraping_service import PageTextRegion
 
 logger = logging.getLogger(__name__)
 DEFAULT_OPENAI_VISION_MODEL = "gpt-4o-mini"
 DEFAULT_OPENAI_VISION_MAX_IMAGES = 3
+PROXIMITY_DISTANCE_CLOSE = 300
+PROXIMITY_DISTANCE_MEDIUM = 600
+PROXIMITY_DISTANCE_FAR = 1000
 IMAGE_RELEVANCE_KEYWORDS = (
     "entry",
     "apply",
@@ -26,6 +31,16 @@ IMAGE_RELEVANCE_KEYWORDS = (
     "募集",
     "締切",
     "受付",
+)
+IMAGE_NOISE_KEYWORDS = (
+    "sponsor",
+    "sponsoring",
+    "logo",
+    "banner",
+    "ad",
+    "広告",
+    "協賛",
+    "助成",
 )
 
 
@@ -102,7 +117,7 @@ class OpenAIImageAnalysisService:
 
     def _select_image_inputs(self, metadata: PageMetadata) -> list[dict[str, str]]:
         max_images = self._get_max_images()
-        selected_images = self._select_relevant_images(metadata.images)
+        selected_images = self._select_relevant_images(metadata)
         image_inputs = [
             {"type": "input_image", "image_url": image.url}
             for image in selected_images[:max_images]
@@ -133,15 +148,72 @@ class OpenAIImageAnalysisService:
 
         return max_images
 
-    def _select_relevant_images(self, images: tuple[PageImage, ...]) -> list[PageImage]:
-        scored_images: list[tuple[int, PageImage]] = []
-        for image in images:
-            haystack = " ".join(part for part in (image.url, image.alt, image.context) if part)
-            score = sum(1 for keyword in IMAGE_RELEVANCE_KEYWORDS if keyword in haystack)
+    def _select_relevant_images(self, metadata: PageMetadata) -> list[PageImage]:
+        scored_images: list[tuple[float, PageImage]] = []
+        for image in metadata.images:
+            score = self._score_image(image=image, deadline_regions=metadata.deadline_regions)
             if score > 0:
                 scored_images.append((score, image))
 
         return [image for _, image in sorted(scored_images, key=lambda item: item[0], reverse=True)]
+
+    def _score_image(
+        self,
+        *,
+        image: PageImage,
+        deadline_regions: tuple[PageTextRegion, ...],
+    ) -> float:
+        haystack = " ".join(part for part in (image.url, image.alt, image.context) if part)
+        score = sum(10 for keyword in IMAGE_RELEVANCE_KEYWORDS if keyword in haystack)
+        score += self._proximity_score(image=image, deadline_regions=deadline_regions)
+        score += self._image_size_bonus(image)
+        score -= sum(20 for keyword in IMAGE_NOISE_KEYWORDS if keyword.lower() in haystack.lower())
+
+        return score
+
+    def _proximity_score(
+        self,
+        *,
+        image: PageImage,
+        deadline_regions: tuple[PageTextRegion, ...],
+    ) -> int:
+        if image.x is None or image.y is None or image.width is None or image.height is None:
+            return 0
+
+        if not deadline_regions:
+            return 0
+
+        image_center_x = image.x + image.width / 2
+        image_center_y = image.y + image.height / 2
+        distances = [
+            math.dist(
+                (image_center_x, image_center_y),
+                (region.x + region.width / 2, region.y + region.height / 2),
+            )
+            for region in deadline_regions
+        ]
+        nearest_distance = min(distances)
+
+        if nearest_distance <= PROXIMITY_DISTANCE_CLOSE:
+            return 30
+        if nearest_distance <= PROXIMITY_DISTANCE_MEDIUM:
+            return 15
+        if nearest_distance <= PROXIMITY_DISTANCE_FAR:
+            return 5
+
+        return 0
+
+    def _image_size_bonus(self, image: PageImage) -> int:
+        if image.width is None or image.height is None:
+            return 0
+
+        area = image.width * image.height
+        if area >= 120000:
+            return 5
+        if area >= 40000:
+            return 3
+
+        return 0
 
     def _parse_image_analysis_result(self, output_text: str) -> ImageAnalysisResult | None:
         stripped_text = self._strip_json_fence(output_text.strip())

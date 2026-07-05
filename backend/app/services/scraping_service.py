@@ -19,6 +19,19 @@ class PageImage:
     url: str
     alt: str | None = None
     context: str | None = None
+    x: float | None = None
+    y: float | None = None
+    width: float | None = None
+    height: float | None = None
+
+
+@dataclass(frozen=True)
+class PageTextRegion:
+    text: str
+    x: float
+    y: float
+    width: float
+    height: float
 
 
 @dataclass(frozen=True)
@@ -27,6 +40,7 @@ class PageMetadata:
     text: str
     image_urls: tuple[str, ...] = ()
     images: tuple[PageImage, ...] = ()
+    deadline_regions: tuple[PageTextRegion, ...] = ()
     source_method: str = "static_html"
     screenshot_base64: str | None = None
     content_hash: str | None = None

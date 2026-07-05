@@ -217,11 +217,17 @@ class DeadlineDetectionService:
             return None
 
         if keyword in PERIOD_KEYWORDS:
-            if len(candidates) == 1:
-                return (self._as_start_candidate(candidates[0]), None)
+            period_candidates = [
+                candidate for candidate in candidates if candidate.start >= keyword_start
+            ]
+            if not period_candidates:
+                period_candidates = candidates
 
-            start_candidate = candidates[0]
-            deadline_candidate = candidates[-1]
+            if len(period_candidates) == 1:
+                return (self._as_start_candidate(period_candidates[0]), None)
+
+            start_candidate = period_candidates[0]
+            deadline_candidate = period_candidates[-1]
             return (self._as_start_candidate(start_candidate), deadline_candidate)
 
         candidate = min(candidates, key=lambda candidate: abs(candidate.start - keyword_start))

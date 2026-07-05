@@ -32,6 +32,8 @@ class DeadlineCheckSummary:
     updated_count: int
     notified_count: int
     failed_count: int
+    html_count: int
+    llm_count: int
 
 
 @dataclass(frozen=True)
@@ -50,12 +52,15 @@ class DeadlineCheckService:
 
     def check_all(self, *, today: date | None = None) -> DeadlineCheckSummary:
         current_date = today or datetime.now(JST).date()
+        races = self.race_repository.list_all()
         checked_count = 0
         updated_count = 0
         notified_count = 0
         failed_count = 0
+        html_count = sum(1 for race in races if race.last_extraction_method == "html")
+        llm_count = sum(1 for race in races if race.last_extraction_method == "llm")
 
-        for race in self.race_repository.list_all():
+        for race in races:
             checked_count += 1
             try:
                 check_result = self.race_service.check_registered_race(race)
@@ -65,7 +70,7 @@ class DeadlineCheckService:
                 logger.warning("deadline check failed race_id=%s error=%s", race.id, exc)
                 continue
 
-            if check_result.changed:
+            if check_result.schedule_changed:
                 updated_count += 1
             if check_result.failed:
                 failed_count += 1
@@ -109,6 +114,8 @@ class DeadlineCheckService:
             updated_count=updated_count,
             notified_count=notified_count,
             failed_count=failed_count,
+            html_count=html_count,
+            llm_count=llm_count,
         )
 
     def _build_notification_candidates(

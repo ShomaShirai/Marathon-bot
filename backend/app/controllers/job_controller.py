@@ -33,4 +33,6 @@ def check_deadlines(
         "updated_count": summary.updated_count,
         "notified_count": summary.notified_count,
         "failed_count": summary.failed_count,
+        "html_count": summary.html_count,
+        "llm_count": summary.llm_count,
     }

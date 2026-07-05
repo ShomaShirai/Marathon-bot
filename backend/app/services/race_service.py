@@ -32,6 +32,7 @@ PAGE_STATUS_ERROR = "error"
 class RaceCheckResult:
     race: Race
     changed: bool
+    schedule_changed: bool
     failed: bool
     notification_events: tuple[str, ...]
 
@@ -137,10 +138,10 @@ class RaceService:
         old_page_status = race.page_status
         old_content_hash = race.last_content_hash
         old_extraction_method = race.last_extraction_method
-        old_detected_text = race.last_detected_text
 
-        metadata, detection, fetch_error, page_status = self._fetch_metadata_and_detect(race.url)
+        metadata, detection, fetch_error, page_status = self._fetch_metadata_and_detect_for_job(race)
         notification_events: list[str] = []
+        schedule_changed = False
 
         race.last_checked_at = checked_at
         race.page_status = page_status
@@ -156,9 +157,19 @@ class RaceService:
             return RaceCheckResult(
                 race=race,
                 changed=old_page_status != race.page_status,
+                schedule_changed=False,
                 failed=True,
                 notification_events=(),
             )
+
+        entry_start_at = self._select_valid_schedule_value(
+            old_value=old_entry_start_at,
+            new_value=detection.entry_start_at,
+        )
+        entry_deadline = self._select_valid_schedule_value(
+            old_value=old_entry_deadline,
+            new_value=detection.entry_deadline,
+        )
 
         if old_page_status in {PAGE_STATUS_PENDING, PAGE_STATUS_ERROR} and page_status == PAGE_STATUS_AVAILABLE:
             self.event_repository.add(
@@ -181,12 +192,12 @@ class RaceService:
             entry_deadline=old_entry_deadline,
         )
         new_schedule_key = self._schedule_key(
-            entry_start_at=detection.entry_start_at,
-            entry_deadline=detection.entry_deadline,
+            entry_start_at=entry_start_at,
+            entry_deadline=entry_deadline,
         )
 
         had_old_schedule = old_entry_start_at is not None or old_entry_deadline is not None
-        has_new_schedule = detection.entry_start_at is not None or detection.entry_deadline is not None
+        has_new_schedule = entry_start_at is not None or entry_deadline is not None
         if has_new_schedule and not had_old_schedule:
             self.event_repository.add(
                 race_id=race.id,
@@ -194,6 +205,7 @@ class RaceService:
                 old_value=old_schedule_key,
                 new_value=new_schedule_key,
             )
+            schedule_changed = True
             notification_events.append("entry_schedule_detected")
         elif has_new_schedule and old_schedule_key != new_schedule_key:
             self.event_repository.add(
@@ -202,6 +214,7 @@ class RaceService:
                 old_value=old_schedule_key,
                 new_value=new_schedule_key,
             )
+            schedule_changed = True
             notification_events.append("entry_schedule_changed")
 
         if detection.entry_status == "closed" and old_entry_status != "closed":
@@ -213,11 +226,14 @@ class RaceService:
             )
 
         race.title = self._select_title(metadata, fallback=race.title)
-        race.entry_start_at = detection.entry_start_at
-        race.entry_deadline = detection.entry_deadline
+        race.entry_start_at = entry_start_at
+        race.entry_deadline = entry_deadline
         race.entry_status = detection.entry_status
         race.last_content_hash = metadata.content_hash if metadata else None
-        race.last_extraction_method = self._select_extraction_method(detection)
+        race.last_extraction_method = self._select_job_extraction_method(
+            old_extraction_method=old_extraction_method,
+            detection=detection,
+        )
         race.last_detected_text = detection.detected_text
 
         changed = any(
@@ -227,8 +243,6 @@ class RaceService:
                 old_entry_status != race.entry_status,
                 old_page_status != race.page_status,
                 old_content_hash != race.last_content_hash,
-                old_extraction_method != race.last_extraction_method,
-                old_detected_text != race.last_detected_text,
             )
         )
 
@@ -237,6 +251,7 @@ class RaceService:
         return RaceCheckResult(
             race=race,
             changed=changed,
+            schedule_changed=schedule_changed,
             failed=False,
             notification_events=tuple(notification_events),
         )
@@ -281,6 +296,88 @@ class RaceService:
         start_text = entry_start_at.isoformat() if entry_start_at else "-"
         deadline_text = entry_deadline.isoformat() if entry_deadline else "-"
         return f"start={start_text};deadline={deadline_text}"
+
+    def _select_valid_schedule_value(
+        self,
+        *,
+        old_value: datetime | None,
+        new_value: datetime | None,
+    ) -> datetime | None:
+        if new_value is None:
+            return old_value
+        if old_value is None:
+            return new_value
+        if new_value < old_value:
+            return old_value
+
+        return new_value
+
+    def _select_job_extraction_method(
+        self,
+        *,
+        old_extraction_method: str | None,
+        detection: DeadlineDetectionResult,
+    ) -> str:
+        if old_extraction_method in {"html", "llm"}:
+            return old_extraction_method
+
+        return self._select_extraction_method(detection)
+
+    def _fetch_metadata_and_detect_for_job(
+        self,
+        race: Race,
+    ) -> tuple[PageMetadata | None, DeadlineDetectionResult, str | None, str]:
+        if race.last_extraction_method == "html":
+            return self._fetch_metadata_and_detect_with_html(race.url)
+        if race.last_extraction_method == "llm":
+            return self._fetch_metadata_and_detect_with_llm(race.url)
+
+        return self._fetch_metadata_and_detect(race.url)
+
+    def _fetch_metadata_and_detect_with_html(
+        self,
+        url: str,
+    ) -> tuple[PageMetadata | None, DeadlineDetectionResult, str | None, str]:
+        static_metadata, static_error, static_page_status = self._fetch_static_metadata(url)
+        static_detection = self._detect_deadline(static_metadata, url=url)
+        if static_page_status == PAGE_STATUS_PENDING:
+            return None, static_detection, static_error, PAGE_STATUS_PENDING
+
+        if self._is_detection_complete(static_detection):
+            return static_metadata, static_detection, None, PAGE_STATUS_AVAILABLE
+
+        rendered_metadata, rendered_error = self._fetch_rendered_metadata(url)
+        rendered_detection = self._detect_deadline(rendered_metadata, url=url)
+        if rendered_metadata is not None:
+            return rendered_metadata, rendered_detection, None, PAGE_STATUS_AVAILABLE
+
+        if static_metadata is not None:
+            return static_metadata, static_detection, None, PAGE_STATUS_AVAILABLE
+
+        fetch_error = static_error or rendered_error or "failed to fetch page metadata"
+        return None, static_detection, fetch_error, static_page_status
+
+    def _fetch_metadata_and_detect_with_llm(
+        self,
+        url: str,
+    ) -> tuple[PageMetadata | None, DeadlineDetectionResult, str | None, str]:
+        rendered_metadata, rendered_error = self._fetch_rendered_metadata(url)
+        if rendered_metadata is None:
+            return None, self._empty_detection(), rendered_error, PAGE_STATUS_ERROR
+
+        image_detection = self._detect_deadline_from_images(rendered_metadata)
+        if image_detection is not None:
+            return rendered_metadata, image_detection, None, PAGE_STATUS_AVAILABLE
+
+        return rendered_metadata, self._empty_detection(), None, PAGE_STATUS_AVAILABLE
+
+    def _empty_detection(self) -> DeadlineDetectionResult:
+        return DeadlineDetectionResult(
+            entry_start_at=None,
+            entry_deadline=None,
+            entry_status="unknown",
+            detected_text=None,
+        )
 
     def _fetch_metadata_and_detect(
         self,

@@ -325,7 +325,7 @@ class RaceService:
         return f"[openai_vision] {text}"
 
     def _is_detection_complete(self, detection: DeadlineDetectionResult) -> bool:
-        return detection.entry_deadline is not None or detection.entry_status == "closed"
+        return detection.entry_start_at is not None or detection.entry_deadline is not None
 
     def _should_try_image_analysis(self, detection: DeadlineDetectionResult) -> bool:
         return detection.entry_start_at is None and detection.entry_deadline is None

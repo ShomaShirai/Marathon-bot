@@ -57,14 +57,18 @@ class SlackNotificationService:
             heading = "エントリー日程を検出しました。"
         elif notification_type == "entry_schedule_changed":
             heading = "エントリー日程が変更されました。"
-        elif notification_type == "7_days_before":
-            heading = "エントリー締切まであと7日です。"
-        elif notification_type == "3_days_before":
-            heading = "エントリー締切まであと3日です。"
-        elif notification_type == "1_day_before":
-            heading = "エントリー締切は明日です。"
-        elif notification_type == "deadline_today":
-            heading = "エントリー締切は本日です。"
+        elif notification_type == "entry_start_30_days_before":
+            heading = "エントリー開始まであと1か月です。"
+        elif notification_type == "entry_start_14_days_before":
+            heading = "エントリー開始まであと2週間です。"
+        elif notification_type == "entry_start_7_days_before":
+            heading = "エントリー開始まであと1週間です。"
+        elif notification_type == "entry_deadline_30_days_before":
+            heading = "エントリー締切まであと1か月です。"
+        elif notification_type == "entry_deadline_14_days_before":
+            heading = "エントリー締切まであと2週間です。"
+        elif notification_type == "entry_deadline_7_days_before":
+            heading = "エントリー締切まであと1週間です。"
         else:
             heading = "マラソン大会の更新があります。"
 

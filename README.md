@@ -172,17 +172,19 @@ Slack へ送信済みの通知を保持し、重複通知を防ぎます。
 | `id` | 通知ID |
 | `race_id` | 対象レースID |
 | `notification_type` | 通知種別 |
-| `dedupe_key` | 重複通知防止キー。日程変更通知では日程文字列、締切接近通知では締切日 |
+| `dedupe_key` | 重複通知防止キー。日程変更通知では日程文字列、開始・締切接近通知では対象日 |
 | `sent_at` | 送信日時 |
 
 `notification_type` の候補:
 
 - `entry_schedule_detected`
 - `entry_schedule_changed`
-- `7_days_before`
-- `3_days_before`
-- `1_day_before`
-- `deadline_today`
+- `entry_start_30_days_before`
+- `entry_start_14_days_before`
+- `entry_start_7_days_before`
+- `entry_deadline_30_days_before`
+- `entry_deadline_14_days_before`
+- `entry_deadline_7_days_before`
 
 ## Scheduler 方針
 

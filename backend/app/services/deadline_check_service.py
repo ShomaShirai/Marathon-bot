@@ -14,11 +14,15 @@ from backend.app.services.slack_notification_service import SlackNotificationSer
 logger = logging.getLogger(__name__)
 
 JST = ZoneInfo("Asia/Tokyo")
-DEADLINE_NOTIFICATION_TYPES = {
-    7: "7_days_before",
-    3: "3_days_before",
-    1: "1_day_before",
-    0: "deadline_today",
+ENTRY_START_NOTIFICATION_TYPES = {
+    30: "entry_start_30_days_before",
+    14: "entry_start_14_days_before",
+    7: "entry_start_7_days_before",
+}
+ENTRY_DEADLINE_NOTIFICATION_TYPES = {
+    30: "entry_deadline_30_days_before",
+    14: "entry_deadline_14_days_before",
+    7: "entry_deadline_7_days_before",
 }
 
 
@@ -122,31 +126,48 @@ class DeadlineCheckService:
             for event_type in schedule_event_types
         ]
 
-        deadline_candidate = self._build_deadline_notification_candidate(race=race, today=today)
-        if deadline_candidate is not None:
-            candidates.append(deadline_candidate)
+        candidates.extend(
+            self._build_date_notification_candidates(
+                race=race,
+                today=today,
+            )
+        )
 
         return candidates
 
-    def _build_deadline_notification_candidate(
+    def _build_date_notification_candidates(
         self,
         *,
         race: Race,
         today: date,
-    ) -> NotificationCandidate | None:
-        if race.entry_deadline is None:
-            return None
+    ) -> list[NotificationCandidate]:
+        candidates: list[NotificationCandidate] = []
 
-        deadline_date = race.entry_deadline.date()
-        days_until_deadline = (deadline_date - today).days
-        notification_type = DEADLINE_NOTIFICATION_TYPES.get(days_until_deadline)
-        if notification_type is None:
-            return None
+        if race.entry_start_at is not None:
+            start_date = race.entry_start_at.date()
+            days_until_start = (start_date - today).days
+            notification_type = ENTRY_START_NOTIFICATION_TYPES.get(days_until_start)
+            if notification_type is not None:
+                candidates.append(
+                    NotificationCandidate(
+                        notification_type=notification_type,
+                        dedupe_key=start_date.isoformat(),
+                    )
+                )
 
-        return NotificationCandidate(
-            notification_type=notification_type,
-            dedupe_key=deadline_date.isoformat(),
-        )
+        if race.entry_deadline is not None:
+            deadline_date = race.entry_deadline.date()
+            days_until_deadline = (deadline_date - today).days
+            notification_type = ENTRY_DEADLINE_NOTIFICATION_TYPES.get(days_until_deadline)
+            if notification_type is not None:
+                candidates.append(
+                    NotificationCandidate(
+                        notification_type=notification_type,
+                        dedupe_key=deadline_date.isoformat(),
+                    )
+                )
+
+        return candidates
 
     def _schedule_key(self, race: Race) -> str:
         start_text = race.entry_start_at.isoformat() if race.entry_start_at else "-"

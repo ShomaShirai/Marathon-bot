@@ -7,9 +7,9 @@ from backend.app.services.deadline_detection_service import DeadlineDetectionSer
 
 TARGET_HOST = "chiba-aqualine-marathon.com"
 TARGET_PATH = "/runner/entry.html"
-TARGET_SECTION_TITLE = "学生応援枠"
+TARGET_SECTION_TITLE = "ちば県民先行枠"
 NEXT_SECTION_TITLES = (
-    "千葉県民先行枠",
+    "学生応援枠",
     "一般枠",
 )
 

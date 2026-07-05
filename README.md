@@ -4,9 +4,9 @@
 
 MVP では、Slack の Slash Command から大会URLを登録し、GitHub Actions cron で定期的にページを確認します。締め切りの検出、締め切り変更、募集終了、ページ変更、チェック失敗を記録し、必要なタイミングで Slack に通知します。
 
-## 無料運用方針
+## 運用方針
 
-このプロジェクトは、できるだけ無料枠の範囲で運用することを前提にします。
+このプロジェクトは、通常処理はできるだけ無料枠の範囲で運用し、画像内テキスト解析が必要な場合のみ OpenAI API の有料利用を許容します。
 
 | 用途 | 採用技術 | 方針 |
 | --- | --- | --- |
@@ -16,6 +16,7 @@ MVP では、Slack の Slash Command から大会URLを登録し、GitHub Action
 | Slack 通知 | Slack App | Bot Token と `chat.postMessage` を使う |
 | Scraping | requests + BeautifulSoup | 静的HTMLを優先して取得する |
 | Dynamic Scraping | Playwright | JavaScript描画が必要なページだけで使う |
+| Image Analysis / LLM | OpenAI API | 画像内テキスト解析と締め切り候補の構造化抽出に使う |
 
 注意点:
 
@@ -23,6 +24,8 @@ MVP では、Slack の Slash Command から大会URLを登録し、GitHub Action
 - GitHub Actions はリポジトリ種別や利用量によって無料枠の扱いが変わります。
 - Slack API にはレート制限があるため、通知は低頻度に抑えます。
 - Playwright は実行時間と依存サイズが大きいため、必要な大会ページだけに限定します。
+- OpenAI API は有料利用を前提にし、`requests + BeautifulSoup` で締め切りを検出できなかった場合のフォールバック時のみ呼び出します。
+- OpenAI API キーは `OPENAI_API_KEY` 環境変数で管理し、README やコードに直接書きません。
 
 参考:
 
@@ -30,6 +33,7 @@ MVP では、Slack の Slash Command から大会URLを登録し、GitHub Action
 - Turso Pricing: https://turso.tech/pricing
 - GitHub Actions Billing: https://docs.github.com/en/billing/concepts/product-billing/github-actions
 - Slack `chat.postMessage`: https://docs.slack.dev/reference/methods/chat.postMessage/
+- OpenAI Images and vision: https://developers.openai.com/api/docs/guides/images-vision
 
 ## 技術スタック
 
@@ -42,6 +46,8 @@ MVP では、Slack の Slash Command から大会URLを登録し、GitHub Action
 - requests
 - BeautifulSoup
 - Playwright
+- OpenAI API
+- openai Python SDK
 - GitHub Actions
 - Render
 
@@ -185,12 +191,14 @@ GitHub Actions は定期的に Render 上の FastAPI に対して `POST /jobs/ch
 
 ## Scraping 方針
 
-基本方針は、軽量で安定した取得を優先します。
+基本方針は、軽量で安定した取得を優先し、検出できない場合だけ段階的に重い処理へフォールバックします。
 
 1. `requests` でHTMLを取得する。
-2. `BeautifulSoup` でタイトル、本文、締め切り候補のテキストを抽出する。
+2. `BeautifulSoup` でタイトル、本文、`img alt`、リンクテキスト、画像URL、締め切り候補の周辺テキストを抽出する。
 3. ページ本文のハッシュを計算し、前回との差分を検出する。
-4. 静的HTMLで締め切りが取れない場合のみ Playwright を使う。
+4. 既存の正規表現ベース検出で締め切りを判定する。
+5. 静的HTMLで締め切りが取れない場合のみ Playwright を使い、レンダリング後DOM、表示テキスト、表示画像、必要に応じてスクリーンショットを取得する。
+6. Playwright でもテキストから締め切りを検出できない場合のみ、OpenAI API に画像URLまたはスクリーンショットのBase64を渡し、画像内の締め切り候補を構造化抽出する。
 
 締め切り検出では、まず以下のような日本語表現を対象にします。
 
@@ -200,6 +208,8 @@ GitHub Actions は定期的に Render 上の FastAPI に対して `POST /jobs/ch
 - 受付終了
 - 申込期間
 - エントリー期間
+
+OpenAI API を使う場合も、用途は画像内の締め切り、申込期間、受付終了などの抽出に限定し、Slack 通知文の生成には使いません。
 
 MVP では完全な自動抽出を目指しすぎず、検出できない場合は `check_failed` または `page_changed` として記録し、改善しやすい形にします。
 
@@ -259,6 +269,9 @@ backend/
 | `DATABASE_URL` | DB接続URL。未設定時は `sqlite:///./local.db` |
 | `APP_BASE_URL` | Render上のアプリURL |
 | `JOB_SECRET` | GitHub Actions cron からジョブAPIを呼ぶためのsecret |
+| `OPENAI_API_KEY` | OpenAI API キー。画像解析フォールバックで使用し、コードやREADMEには直接書かない |
+| `ENABLE_LLM_IMAGE_ANALYSIS` | OpenAI API による画像解析を有効化するフラグ |
+| `OPENAI_VISION_MODEL` | 画像解析に使う OpenAI モデル名 |
 
 ## Database / Migration
 
@@ -355,6 +368,8 @@ uvicorn backend.app.main:app --reload
 7. `/marathon add <URL>` で大会を登録できるようにする。
 8. requests + BeautifulSoup のスクレイピング処理を実装する。
 9. 締め切り検出とイベント記録を実装する。
-10. Slack 通知送信を実装する。
-11. GitHub Actions cron から `/jobs/check-deadlines` を呼び出す。
-12. Render にデプロイする。
+10. Playwright によるレンダリング後DOM取得のフォールバックを実装する。
+11. OpenAI API による画像解析フォールバックを実装する。
+12. Slack 通知送信を実装する。
+13. GitHub Actions cron から `/jobs/check-deadlines` を呼び出す。
+14. Render にデプロイする。

@@ -154,9 +154,11 @@ class RaceService:
             return rendered_metadata, rendered_detection, None
 
         image_metadata = rendered_metadata or static_metadata
-        image_detection = self._detect_deadline_from_images(image_metadata)
-        if image_detection is not None:
-            return image_metadata, image_detection, None
+        fallback_detection = rendered_detection if rendered_metadata is not None else static_detection
+        if self._should_try_image_analysis(fallback_detection):
+            image_detection = self._detect_deadline_from_images(image_metadata)
+            if image_detection is not None:
+                return image_metadata, image_detection, None
 
         if rendered_metadata is not None:
             return rendered_metadata, rendered_detection, None
@@ -232,6 +234,9 @@ class RaceService:
 
     def _is_detection_complete(self, detection: DeadlineDetectionResult) -> bool:
         return detection.entry_deadline is not None or detection.entry_status == "closed"
+
+    def _should_try_image_analysis(self, detection: DeadlineDetectionResult) -> bool:
+        return detection.entry_start_at is None and detection.entry_deadline is None
 
     def _select_extraction_method(self, detection: DeadlineDetectionResult) -> str:
         if detection.detected_text and detection.detected_text.startswith("[openai_vision]"):

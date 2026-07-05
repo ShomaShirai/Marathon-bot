@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 import json
 import logging
 import re
@@ -30,7 +31,10 @@ IMAGE_RELEVANCE_KEYWORDS = (
 
 @dataclass(frozen=True)
 class ImageAnalysisResult:
-    detected_text: str
+    entry_start_date: str | None
+    entry_deadline_date: str | None
+    entry_status: str
+    evidence_text: str | None
 
 
 class OpenAIImageAnalysisService:
@@ -60,9 +64,15 @@ class OpenAIImageAnalysisService:
                                     "画像から日本語のマラソン大会エントリー情報を抽出してください。"
                                     "対象はエントリー開始、申込開始、エントリー締切、申込締切、"
                                     "募集締切、受付終了、申込期間、エントリー期間だけです。"
-                                    "通知文は作らず、根拠として読めた文字列だけを返してください。"
-                                    "JSON形式で {\"detected_text\": \"...\"} のみを返してください。"
-                                    "該当情報がない場合は detected_text を空文字にしてください。"
+                                    "通知文は作らず、JSONのみを返してください。"
+                                    "日付は必ず YYYY-MM-DD 形式にしてください。"
+                                    "画像内に年が読めない日付は推測せず null にしてください。"
+                                    "entry_status は open, closed, unknown のいずれかにしてください。"
+                                    "JSON形式は {\"entry_start_date\": null, "
+                                    "\"entry_deadline_date\": null, "
+                                    "\"entry_status\": \"unknown\", "
+                                    "\"evidence_text\": \"...\"} です。"
+                                    "該当情報がない場合は日付を null、entry_status を unknown にしてください。"
                                 ),
                             },
                             *image_inputs,
@@ -77,11 +87,11 @@ class OpenAIImageAnalysisService:
             logger.warning("openai image analysis skipped due to api error: %s", self._format_api_error(exc))
             return None
 
-        detected_text = self._parse_detected_text(response.output_text)
-        if not detected_text:
+        image_analysis = self._parse_image_analysis_result(response.output_text)
+        if image_analysis is None:
             return None
 
-        return ImageAnalysisResult(detected_text=f"[openai_vision] {detected_text}")
+        return image_analysis
 
     def _is_enabled(self) -> bool:
         if not get_env("OPENAI_API_KEY"):
@@ -133,18 +143,59 @@ class OpenAIImageAnalysisService:
 
         return [image for _, image in sorted(scored_images, key=lambda item: item[0], reverse=True)]
 
-    def _parse_detected_text(self, output_text: str) -> str:
+    def _parse_image_analysis_result(self, output_text: str) -> ImageAnalysisResult | None:
         stripped_text = self._strip_json_fence(output_text.strip())
         try:
             payload = json.loads(stripped_text)
         except json.JSONDecodeError:
-            return re.sub(r"\s+", " ", stripped_text).strip()
+            return None
 
-        detected_text = payload.get("detected_text")
-        if not isinstance(detected_text, str):
-            return ""
+        entry_start_date = self._normalize_date_value(payload.get("entry_start_date"))
+        entry_deadline_date = self._normalize_date_value(payload.get("entry_deadline_date"))
+        entry_status = self._normalize_entry_status(payload.get("entry_status"))
+        evidence_text = self._normalize_text_value(payload.get("evidence_text"))
 
-        return re.sub(r"\s+", " ", detected_text).strip()
+        if entry_start_date is None and entry_deadline_date is None and evidence_text is None:
+            return None
+
+        return ImageAnalysisResult(
+            entry_start_date=entry_start_date,
+            entry_deadline_date=entry_deadline_date,
+            entry_status=entry_status,
+            evidence_text=evidence_text,
+        )
+
+    def _normalize_date_value(self, value: object) -> str | None:
+        if not isinstance(value, str):
+            return None
+
+        normalized_value = value.strip()
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", normalized_value):
+            return None
+
+        try:
+            datetime.strptime(normalized_value, "%Y-%m-%d")
+        except ValueError:
+            return None
+
+        return normalized_value
+
+    def _normalize_entry_status(self, value: object) -> str:
+        if not isinstance(value, str):
+            return "unknown"
+
+        normalized_value = value.strip().lower()
+        if normalized_value in {"open", "closed", "unknown"}:
+            return normalized_value
+
+        return "unknown"
+
+    def _normalize_text_value(self, value: object) -> str | None:
+        if not isinstance(value, str):
+            return None
+
+        normalized_value = re.sub(r"\s+", " ", value).strip()
+        return normalized_value or None
 
     def _strip_json_fence(self, text: str) -> str:
         match = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", text, flags=re.DOTALL)

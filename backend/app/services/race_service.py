@@ -1,6 +1,7 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time
 import logging
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo
 
 import requests
 from sqlalchemy.orm import Session
@@ -12,12 +13,14 @@ from backend.app.repositories.race_repository import RaceRepository
 from backend.app.services.deadline_detection_service import DeadlineDetectionService
 from backend.app.services.deadline_detection_service import DeadlineDetectionResult
 from backend.app.services.openai_image_analysis_service import OpenAIImageAnalysisService
+from backend.app.services.openai_image_analysis_service import ImageAnalysisResult
 from backend.app.services.rendered_scraping_service import RenderedScrapingService
 from backend.app.services.scraping_service import PageMetadata
 from backend.app.services.scraping_service import ScrapingService
 
 logger = logging.getLogger(__name__)
 SCRAPING_LOG_TEXT_LIMIT = 2000
+JST = ZoneInfo("Asia/Tokyo")
 
 
 class InvalidRaceUrlError(ValueError):
@@ -219,18 +222,86 @@ class RaceService:
         if image_analysis is None:
             return None
 
-        image_metadata = PageMetadata(
+        detection = self._build_detection_from_image_analysis(image_analysis)
+        image_metadata = self._build_image_analysis_metadata(metadata=metadata, image_analysis=image_analysis)
+        self._log_local_scraping_detection(metadata=image_metadata, detection=detection)
+        return detection
+
+    def _build_detection_from_image_analysis(
+        self,
+        image_analysis: ImageAnalysisResult,
+    ) -> DeadlineDetectionResult:
+        entry_start_at = self._build_date_datetime(image_analysis.entry_start_date, day_end=False)
+        entry_deadline = self._build_date_datetime(image_analysis.entry_deadline_date, day_end=True)
+        detected_text = self._build_image_analysis_detected_text(image_analysis)
+
+        return DeadlineDetectionResult(
+            entry_start_at=entry_start_at,
+            entry_deadline=entry_deadline,
+            entry_status=self._select_image_analysis_entry_status(
+                image_analysis=image_analysis,
+                entry_deadline=entry_deadline,
+            ),
+            detected_text=detected_text,
+        )
+
+    def _build_image_analysis_metadata(
+        self,
+        *,
+        metadata: PageMetadata,
+        image_analysis: ImageAnalysisResult,
+    ) -> PageMetadata:
+        return PageMetadata(
             title=metadata.title,
-            text=image_analysis.detected_text,
+            text=self._build_image_analysis_detected_text(image_analysis) or "",
             image_urls=metadata.image_urls,
             images=metadata.images,
             source_method="openai_vision",
             screenshot_base64=metadata.screenshot_base64,
             content_hash=metadata.content_hash,
         )
-        detection = self.deadline_detection_service.detect(image_metadata.text)
-        self._log_local_scraping_detection(metadata=image_metadata, detection=detection)
-        return detection
+
+    def _build_date_datetime(self, date_text: str | None, *, day_end: bool) -> datetime | None:
+        if date_text is None:
+            return None
+
+        try:
+            detected_date = datetime.strptime(date_text, "%Y-%m-%d").date()
+        except ValueError:
+            return None
+
+        return datetime.combine(
+            detected_date,
+            time(23, 59, 59) if day_end else time(0, 0, 0),
+            tzinfo=JST,
+        )
+
+    def _select_image_analysis_entry_status(
+        self,
+        *,
+        image_analysis: ImageAnalysisResult,
+        entry_deadline: datetime | None,
+    ) -> str:
+        if image_analysis.entry_status == "closed":
+            return "closed"
+
+        if entry_deadline is not None:
+            return "open"
+
+        return image_analysis.entry_status
+
+    def _build_image_analysis_detected_text(self, image_analysis: ImageAnalysisResult) -> str | None:
+        parts = [
+            f"entry_start_date={image_analysis.entry_start_date}" if image_analysis.entry_start_date else None,
+            f"entry_deadline_date={image_analysis.entry_deadline_date}" if image_analysis.entry_deadline_date else None,
+            f"entry_status={image_analysis.entry_status}",
+            image_analysis.evidence_text,
+        ]
+        text = " ".join(part for part in parts if part)
+        if not text:
+            return None
+
+        return f"[openai_vision] {text}"
 
     def _is_detection_complete(self, detection: DeadlineDetectionResult) -> bool:
         return detection.entry_deadline is not None or detection.entry_status == "closed"

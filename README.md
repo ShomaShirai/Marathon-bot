@@ -309,6 +309,19 @@ curl http://127.0.0.1:8000/health
 {"status":"ok"}
 ```
 
+開発用に、Slackを経由せずURL登録を確認できます。
+
+```bash
+curl "http://127.0.0.1:8000/add?url=https://www.sendaihalf.com/runner/entry/"
+```
+
+開発用に、登録済み大会の一覧確認と削除もできます。
+
+```bash
+curl http://127.0.0.1:8000/list
+curl -X DELETE http://127.0.0.1:8000/remove/1
+```
+
 停止します。
 
 ```bash

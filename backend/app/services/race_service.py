@@ -171,12 +171,12 @@ class RaceService:
             return
 
         logger.info(
-            "Scraping detection input title=%r text_excerpt=%r",
+            "[local scraping] detection input title=%r text_excerpt=%r",
             metadata.title,
             metadata.text[:SCRAPING_LOG_TEXT_LIMIT],
         )
         logger.info(
-            "Scraping detection result entry_start_at=%s entry_deadline=%s entry_status=%s detected_text=%r",
+            "[local scraping] detection result entry_start_at=%s entry_deadline=%s entry_status=%s detected_text=%r",
             detection.entry_start_at,
             detection.entry_deadline,
             detection.entry_status,

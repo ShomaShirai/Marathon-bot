@@ -8,8 +8,8 @@ from backend.app.core.config import get_env
 from backend.app.services.scraping_service import PageImage
 from backend.app.services.scraping_service import PageMetadata
 
-DEFAULT_OPENAI_VISION_MODEL = "gpt-5.5"
-MAX_IMAGE_INPUTS = 3
+DEFAULT_OPENAI_VISION_MODEL = "gpt-4o-mini"
+DEFAULT_OPENAI_VISION_MAX_IMAGES = 3
 IMAGE_RELEVANCE_KEYWORDS = (
     "entry",
     "apply",
@@ -44,7 +44,7 @@ class OpenAIImageAnalysisService:
 
         client = OpenAI(api_key=get_env("OPENAI_API_KEY"))
         response = client.responses.create(
-            model=get_env("OPENAI_VISION_MODEL", DEFAULT_OPENAI_VISION_MODEL),
+            model=self._get_model(),
             input=[
                 {
                     "role": "user",
@@ -80,13 +80,14 @@ class OpenAIImageAnalysisService:
         return enabled.lower() in {"1", "true", "yes", "on"}
 
     def _select_image_inputs(self, metadata: PageMetadata) -> list[dict[str, str]]:
+        max_images = self._get_max_images()
         selected_images = self._select_relevant_images(metadata.images)
         image_inputs = [
             {"type": "input_image", "image_url": image.url}
-            for image in selected_images[:MAX_IMAGE_INPUTS]
+            for image in selected_images[:max_images]
         ]
 
-        if len(image_inputs) < MAX_IMAGE_INPUTS and metadata.screenshot_base64:
+        if len(image_inputs) < max_images and metadata.screenshot_base64:
             image_inputs.append(
                 {
                     "type": "input_image",
@@ -95,6 +96,21 @@ class OpenAIImageAnalysisService:
             )
 
         return image_inputs
+
+    def _get_model(self) -> str:
+        return get_env("OPENAI_VISION_MODEL", DEFAULT_OPENAI_VISION_MODEL) or DEFAULT_OPENAI_VISION_MODEL
+
+    def _get_max_images(self) -> int:
+        raw_max_images = get_env("OPENAI_VISION_MAX_IMAGES", str(DEFAULT_OPENAI_VISION_MAX_IMAGES))
+        try:
+            max_images = int(raw_max_images or DEFAULT_OPENAI_VISION_MAX_IMAGES)
+        except ValueError:
+            return DEFAULT_OPENAI_VISION_MAX_IMAGES
+
+        if max_images <= 0:
+            return DEFAULT_OPENAI_VISION_MAX_IMAGES
+
+        return max_images
 
     def _select_relevant_images(self, images: tuple[PageImage, ...]) -> list[PageImage]:
         scored_images: list[tuple[int, PageImage]] = []

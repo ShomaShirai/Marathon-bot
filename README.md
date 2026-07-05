@@ -271,7 +271,8 @@ backend/
 | `JOB_SECRET` | GitHub Actions cron からジョブAPIを呼ぶためのsecret |
 | `OPENAI_API_KEY` | OpenAI API キー。画像解析フォールバックで使用し、コードやREADMEには直接書かない |
 | `ENABLE_LLM_IMAGE_ANALYSIS` | OpenAI API による画像解析を有効化するフラグ。未設定時は `OPENAI_API_KEY` があれば有効 |
-| `OPENAI_VISION_MODEL` | 画像解析に使う OpenAI モデル名 |
+| `OPENAI_VISION_MODEL` | 画像解析に使う OpenAI モデル名。未設定時は `gpt-4o-mini` |
+| `OPENAI_VISION_MAX_IMAGES` | 画像解析に渡す最大画像数。未設定時は `3` |
 
 ## Database / Migration
 

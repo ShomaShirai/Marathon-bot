@@ -21,6 +21,9 @@ from backend.app.services.scraping_service import ScrapingService
 logger = logging.getLogger(__name__)
 SCRAPING_LOG_TEXT_LIMIT = 2000
 JST = ZoneInfo("Asia/Tokyo")
+PAGE_STATUS_AVAILABLE = "available"
+PAGE_STATUS_PENDING = "pending"
+PAGE_STATUS_ERROR = "error"
 
 
 class InvalidRaceUrlError(ValueError):
@@ -50,7 +53,7 @@ class RaceService:
     ) -> Race:
         normalized_url, source_domain = self._normalize_url(url)
         checked_at = datetime.now(UTC)
-        metadata, detection, fetch_error = self._fetch_metadata_and_detect(normalized_url)
+        metadata, detection, fetch_error, page_status = self._fetch_metadata_and_detect(normalized_url)
         title = self._select_title(metadata, fallback=source_domain)
 
         race = Race(
@@ -60,6 +63,7 @@ class RaceService:
             title=title,
             url=normalized_url,
             source_domain=source_domain,
+            page_status=page_status,
             entry_start_at=detection.entry_start_at,
             entry_deadline=detection.entry_deadline,
             entry_status=detection.entry_status,
@@ -75,6 +79,7 @@ class RaceService:
                 race=race,
                 detection=detection,
                 fetch_error=fetch_error,
+                page_status=page_status,
             )
             self.repository.commit()
             self.repository.refresh(race)
@@ -145,38 +150,54 @@ class RaceService:
     def _fetch_metadata_and_detect(
         self,
         url: str,
-    ) -> tuple[PageMetadata | None, DeadlineDetectionResult, str | None]:
-        static_metadata, static_error = self._fetch_static_metadata(url)
+    ) -> tuple[PageMetadata | None, DeadlineDetectionResult, str | None, str]:
+        static_metadata, static_error, static_page_status = self._fetch_static_metadata(url)
         static_detection = self._detect_deadline(static_metadata)
+        if static_page_status == PAGE_STATUS_PENDING:
+            return None, static_detection, static_error, PAGE_STATUS_PENDING
+
         if self._is_detection_complete(static_detection):
-            return static_metadata, static_detection, None
+            return static_metadata, static_detection, None, PAGE_STATUS_AVAILABLE
 
         rendered_metadata, rendered_error = self._fetch_rendered_metadata(url)
         rendered_detection = self._detect_deadline(rendered_metadata)
         if self._is_detection_complete(rendered_detection):
-            return rendered_metadata, rendered_detection, None
+            return rendered_metadata, rendered_detection, None, PAGE_STATUS_AVAILABLE
 
         image_metadata = rendered_metadata or static_metadata
         fallback_detection = rendered_detection if rendered_metadata is not None else static_detection
         if self._should_try_image_analysis(fallback_detection):
             image_detection = self._detect_deadline_from_images(image_metadata)
             if image_detection is not None:
-                return image_metadata, image_detection, None
+                return image_metadata, image_detection, None, PAGE_STATUS_AVAILABLE
 
         if rendered_metadata is not None:
-            return rendered_metadata, rendered_detection, None
+            return rendered_metadata, rendered_detection, None, PAGE_STATUS_AVAILABLE
 
         if static_metadata is not None:
-            return static_metadata, static_detection, None
+            return static_metadata, static_detection, None, PAGE_STATUS_AVAILABLE
 
         fetch_error = static_error or rendered_error or "failed to fetch page metadata"
-        return None, static_detection, fetch_error
+        return None, static_detection, fetch_error, static_page_status
 
-    def _fetch_static_metadata(self, url: str) -> tuple[PageMetadata | None, str | None]:
+    def _fetch_static_metadata(self, url: str) -> tuple[PageMetadata | None, str | None, str]:
         try:
-            return self.scraping_service.fetch_metadata(url), None
+            return self.scraping_service.fetch_metadata(url), None, PAGE_STATUS_AVAILABLE
         except requests.RequestException as exc:
-            return None, str(exc)
+            return None, str(exc), self._page_status_for_request_exception(exc)
+
+    def _page_status_for_request_exception(self, exc: requests.RequestException) -> str:
+        if self._http_status_code(exc) == 404:
+            return PAGE_STATUS_PENDING
+
+        return PAGE_STATUS_ERROR
+
+    def _http_status_code(self, exc: requests.RequestException) -> int | None:
+        response = getattr(exc, "response", None)
+        if response is None:
+            return None
+
+        return getattr(response, "status_code", None)
 
     def _fetch_rendered_metadata(self, url: str) -> tuple[PageMetadata | None, str | None]:
         try:
@@ -344,11 +365,12 @@ class RaceService:
         race: Race,
         detection: DeadlineDetectionResult,
         fetch_error: str | None,
+        page_status: str,
     ) -> None:
         if fetch_error:
             self.event_repository.add(
                 race_id=race.id,
-                event_type="check_failed",
+                event_type="page_pending" if page_status == PAGE_STATUS_PENDING else "check_failed",
                 new_value=fetch_error,
             )
             return

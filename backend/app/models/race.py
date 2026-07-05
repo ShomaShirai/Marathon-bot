@@ -18,6 +18,7 @@ class Race(Base):
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     url: Mapped[str] = mapped_column(Text, nullable=False)
     source_domain: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    page_status: Mapped[str | None] = mapped_column(String(50))
     entry_start_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     entry_deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     entry_status: Mapped[str | None] = mapped_column(String(50))

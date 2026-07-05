@@ -104,6 +104,7 @@ def _serialize_race(race: object) -> dict[str, object]:
         "title": getattr(race, "title"),
         "url": getattr(race, "url"),
         "source_domain": getattr(race, "source_domain"),
+        "page_status": getattr(race, "page_status"),
         "entry_start_at": entry_start_at.isoformat() if entry_start_at else None,
         "entry_deadline": entry_deadline.isoformat() if entry_deadline else None,
         "entry_status": getattr(race, "entry_status"),

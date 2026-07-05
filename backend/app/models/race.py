@@ -23,6 +23,7 @@ class Race(Base):
     entry_status: Mapped[str | None] = mapped_column(String(50))
     last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_content_hash: Mapped[str | None] = mapped_column(String(255))
+    last_extraction_method: Mapped[str | None] = mapped_column(String(50))
     last_detected_text: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

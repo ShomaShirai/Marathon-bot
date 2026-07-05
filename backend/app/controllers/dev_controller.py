@@ -108,5 +108,6 @@ def _serialize_race(race: object) -> dict[str, object]:
         "entry_deadline": entry_deadline.isoformat() if entry_deadline else None,
         "entry_status": getattr(race, "entry_status"),
         "last_checked_at": last_checked_at.isoformat() if last_checked_at else None,
+        "last_extraction_method": getattr(race, "last_extraction_method"),
         "last_detected_text": getattr(race, "last_detected_text"),
     }

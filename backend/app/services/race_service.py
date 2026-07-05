@@ -62,6 +62,7 @@ class RaceService:
             entry_status=detection.entry_status,
             last_checked_at=checked_at,
             last_content_hash=metadata.content_hash if metadata else None,
+            last_extraction_method=self._select_extraction_method(detection),
             last_detected_text=detection.detected_text,
         )
 
@@ -231,6 +232,12 @@ class RaceService:
 
     def _is_detection_complete(self, detection: DeadlineDetectionResult) -> bool:
         return detection.entry_deadline is not None or detection.entry_status == "closed"
+
+    def _select_extraction_method(self, detection: DeadlineDetectionResult) -> str:
+        if detection.detected_text and detection.detected_text.startswith("[openai_vision]"):
+            return "llm"
+
+        return "html"
 
     def _log_local_scraping_detection(
         self,

@@ -6,6 +6,7 @@ services:
     ports:
       - "${PORT:-8000}:8000"
     environment:
+      APP_ENV: ${APP_ENV:-local}
       PORT: 8000
       DATABASE_URL: ${DATABASE_URL:-sqlite:///./local.db}
       SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-}

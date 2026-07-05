@@ -253,6 +253,7 @@ backend/
 
 | Name | Description |
 | --- | --- |
+| `APP_ENV` | 実行環境。`local` の場合はスクレイピング検出ログを出力 |
 | `SLACK_BOT_TOKEN` | Slack Bot User OAuth Token |
 | `SLACK_SIGNING_SECRET` | Slackリクエスト署名検証用のsecret |
 | `DATABASE_URL` | DB接続URL。未設定時は `sqlite:///./local.db` |

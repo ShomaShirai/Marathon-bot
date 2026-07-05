@@ -1,9 +1,11 @@
 from datetime import UTC, datetime
+import logging
 from urllib.parse import urlparse
 
 import requests
 from sqlalchemy.orm import Session
 
+from backend.app.core.config import is_local_env
 from backend.app.models.race import Race
 from backend.app.repositories.race_event_repository import RaceEventRepository
 from backend.app.repositories.race_repository import RaceRepository
@@ -11,6 +13,9 @@ from backend.app.services.deadline_detection_service import DeadlineDetectionSer
 from backend.app.services.deadline_detection_service import DeadlineDetectionResult
 from backend.app.services.scraping_service import PageMetadata
 from backend.app.services.scraping_service import ScrapingService
+
+logger = logging.getLogger(__name__)
+SCRAPING_LOG_TEXT_LIMIT = 2000
 
 
 class InvalidRaceUrlError(ValueError):
@@ -152,7 +157,31 @@ class RaceService:
                 detected_text=None,
             )
 
-        return self.deadline_detection_service.detect(metadata.text)
+        detection = self.deadline_detection_service.detect(metadata.text)
+        self._log_local_scraping_detection(metadata=metadata, detection=detection)
+        return detection
+
+    def _log_local_scraping_detection(
+        self,
+        *,
+        metadata: PageMetadata,
+        detection: DeadlineDetectionResult,
+    ) -> None:
+        if not is_local_env():
+            return
+
+        logger.info(
+            "Scraping detection input title=%r text_excerpt=%r",
+            metadata.title,
+            metadata.text[:SCRAPING_LOG_TEXT_LIMIT],
+        )
+        logger.info(
+            "Scraping detection result entry_start_at=%s entry_deadline=%s entry_status=%s detected_text=%r",
+            detection.entry_start_at,
+            detection.entry_deadline,
+            detection.entry_status,
+            detection.detected_text,
+        )
 
     def _record_registration_event(
         self,

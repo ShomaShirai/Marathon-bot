@@ -1,6 +1,9 @@
 name: Check marathon deadlines
 
 on:
+  push:
+    branches:
+      - main
   schedule:
     - cron: "0 22 */4 * *"
   workflow_dispatch:
@@ -8,12 +11,22 @@ on:
 jobs:
   check-deadlines:
     runs-on: ubuntu-latest
+    env:
+      APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
+      JOB_SECRET: ${{ secrets.JOB_SECRET }}
     steps:
-      - name: Call deadline check job
+      - name: Validate required secrets
+        shell: bash
         run: |
-          curl --fail-with-body \
-            -X POST "${APP_BASE_URL}/jobs/check-deadlines" \
+          set -euo pipefail
+          test -n "${APP_BASE_URL}" || { echo "APP_BASE_URL secret is not set"; exit 1; }
+          test -n "${JOB_SECRET}" || { echo "JOB_SECRET secret is not set"; exit 1; }
+
+      - name: Call deadline check job
+        shell: bash
+        run: |
+          set -euo pipefail
+          base_url="${APP_BASE_URL%/}"
+          curl --fail-with-body --show-error --silent \
+            -X POST "${base_url}/jobs/check-deadlines" \
             -H "Authorization: Bearer ${JOB_SECRET}"
-        env:
-          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
-          JOB_SECRET: ${{ secrets.JOB_SECRET }}

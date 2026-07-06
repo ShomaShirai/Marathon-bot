@@ -132,8 +132,8 @@ class RaceService:
 
     def check_registered_race(self, race: Race) -> RaceCheckResult:
         checked_at = datetime.now(UTC)
-        old_entry_start_at = race.entry_start_at
-        old_entry_deadline = race.entry_deadline
+        old_entry_start_at = self._normalize_schedule_datetime(race.entry_start_at)
+        old_entry_deadline = self._normalize_schedule_datetime(race.entry_deadline)
         old_entry_status = race.entry_status
         old_page_status = race.page_status
         old_content_hash = race.last_content_hash
@@ -303,6 +303,8 @@ class RaceService:
         old_value: datetime | None,
         new_value: datetime | None,
     ) -> datetime | None:
+        old_value = self._normalize_schedule_datetime(old_value)
+        new_value = self._normalize_schedule_datetime(new_value)
         if new_value is None:
             return old_value
         if old_value is None:
@@ -311,6 +313,14 @@ class RaceService:
             return old_value
 
         return new_value
+
+    def _normalize_schedule_datetime(self, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None or value.utcoffset() is None:
+            return value.replace(tzinfo=JST)
+
+        return value.astimezone(JST)
 
     def _select_job_extraction_method(
         self,

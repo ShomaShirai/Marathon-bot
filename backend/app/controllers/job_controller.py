@@ -39,4 +39,8 @@ def check_deadlines(
         "llm_count": summary.llm_count,
         "tennis_synced_count": tennis_summary.synced_count,
         "tennis_created_count": tennis_summary.created_count,
+        "tennis_skipped_full_count": tennis_summary.skipped_full_count,
+        "tennis_skipped_date_count": tennis_summary.skipped_date_count,
+        "tennis_skipped_level_count": tennis_summary.skipped_level_count,
+        "tennis_skipped_unknown_count": tennis_summary.skipped_unknown_count,
     }

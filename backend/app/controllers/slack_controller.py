@@ -1,16 +1,20 @@
+import logging
 from urllib.parse import parse_qs
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+import requests
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from backend.app.core.config import get_env
-from backend.app.core.database import get_db
+from backend.app.core.database import SessionLocal, get_db
 from backend.app.core.security import verify_slack_signature
 from backend.app.repositories.channel_subscription_repository import ChannelSubscriptionRepository
 from backend.app.services.race_service import CATEGORY_MARATHON, CATEGORY_TENNIS
 from backend.app.services.race_service import InvalidRaceIdError, InvalidRaceUrlError, RaceService
 
 router = APIRouter(prefix="/slack", tags=["slack"])
+logger = logging.getLogger(__name__)
+SLACK_RESPONSE_URL_TIMEOUT_SECONDS = 10
 
 
 def _first_value(form_data: dict[str, list[str]], key: str) -> str:
@@ -21,6 +25,7 @@ def _first_value(form_data: dict[str, list[str]], key: str) -> str:
 @router.post("/commands")
 async def handle_slack_command(
     request: Request,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ) -> dict[str, str]:
     body = await request.body()
@@ -50,6 +55,7 @@ async def handle_slack_command(
     slack_team_id = _first_value(form_data, "team_id")
     slack_channel_id = _first_value(form_data, "channel_id")
     registered_by = _first_value(form_data, "user_id")
+    response_url = _first_value(form_data, "response_url")
 
     if command == "/tennis":
         return _handle_tennis_command(
@@ -89,13 +95,24 @@ async def handle_slack_command(
         }
 
     if text == "list":
+        if response_url:
+            background_tasks.add_task(
+                _send_marathon_list_response,
+                response_url=response_url,
+                slack_team_id=slack_team_id,
+                slack_channel_id=slack_channel_id,
+            )
+            return {
+                "response_type": "ephemeral",
+                "text": "登録済みの大会を取得しています。",
+            }
+
         race_service = RaceService(db)
         races = race_service.list_by_slack_channel(
             slack_team_id=slack_team_id,
             slack_channel_id=slack_channel_id,
             category=CATEGORY_MARATHON,
         )
-
         return {
             "response_type": "ephemeral",
             "text": _build_list_response_text(races),
@@ -132,6 +149,41 @@ async def handle_slack_command(
         "response_type": "ephemeral",
         "text": "使い方: /marathon add <大会URL>、/marathon list、/marathon remove <race_id>",
     }
+
+
+def _send_marathon_list_response(
+    *,
+    response_url: str,
+    slack_team_id: str,
+    slack_channel_id: str,
+) -> None:
+    db = SessionLocal()
+    try:
+        race_service = RaceService(db)
+        races = race_service.list_by_slack_channel(
+            slack_team_id=slack_team_id,
+            slack_channel_id=slack_channel_id,
+            category=CATEGORY_MARATHON,
+        )
+        text = _build_list_response_text(races)
+    except Exception as exc:
+        logger.warning("failed to build marathon list response error=%s", exc)
+        text = "登録済み大会の取得に失敗しました。時間をおいて再度お試しください。"
+    finally:
+        db.close()
+
+    try:
+        response = requests.post(
+            response_url,
+            json={
+                "response_type": "ephemeral",
+                "text": text,
+            },
+            timeout=SLACK_RESPONSE_URL_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+    except Exception as exc:
+        logger.warning("failed to send marathon list response to Slack error=%s", exc)
 
 
 def _signing_secret_for_command(command: str) -> str | None:

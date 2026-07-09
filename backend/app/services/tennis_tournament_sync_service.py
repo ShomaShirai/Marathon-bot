@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
+from backend.app.core.config import is_local_env
 from backend.app.repositories.channel_subscription_repository import ChannelSubscriptionRepository
 from backend.app.services.race_service import CATEGORY_TENNIS, RaceService
 from backend.app.services.scraping_service import ScrapingService
@@ -31,6 +32,7 @@ TARGET_LEVEL_KEYWORDS = ("初中級", "初級", "初心者", "初級者", "初�
 FULL_TOURNAMENT_KEYWORDS = ("満員", "キャンセル待ち", "募集終了")
 TOURNAMENT_LOOKAHEAD_DAYS = 90
 MAX_DETAIL_ENRICHMENT_COUNT = 20
+LOCAL_LOG_TEXT_LIMIT = 500
 DATE_PATTERNS = (
     re.compile(r"(?P<year>\d{4})\s*年\s*(?P<month>\d{1,2})\s*月\s*(?P<day>\d{1,2})\s*日"),
     re.compile(r"(?P<year>\d{4})[/-](?P<month>\d{1,2})[/-](?P<day>\d{1,2})"),
@@ -75,7 +77,9 @@ class TennisTournamentSyncService:
 
     def sync(self) -> TennisTournamentSyncSummary:
         subscriptions = self.subscription_repository.list_by_category(category=CATEGORY_TENNIS)
+        self._log_local("subscription_count=%s", len(subscriptions))
         if not subscriptions:
+            self._log_local("skip scraping because no tennis channel subscription exists")
             return TennisTournamentSyncSummary(synced_count=0, created_count=0)
 
         filter_result = self._fetch_filtered_tournament_candidates()
@@ -122,6 +126,8 @@ class TennisTournamentSyncService:
                 skipped_unknown_count=1,
             )
 
+        self._log_local("scraped_candidate_count=%s", len(candidates))
+        self._log_local_candidates("scraped", candidates)
         return self._filter_tournament_candidates(candidates)
 
     def _fetch_tournament_candidates_with_playwright(self) -> list[TennisTournamentCandidate]:
@@ -211,27 +217,42 @@ class TennisTournamentSyncService:
         for candidate in candidates:
             enriched_candidate = candidate
             if self._needs_detail_enrichment(candidate) and detail_enrichment_count < MAX_DETAIL_ENRICHMENT_COUNT:
+                self._log_local_candidate("enriching", candidate)
                 enriched_candidate = self._enrich_candidate_from_detail(candidate)
+                self._log_local_candidate("enriched", enriched_candidate)
                 detail_enrichment_count += 1
 
             if self._is_full_or_closed(enriched_candidate):
                 skipped_full_count += 1
+                self._log_local_candidate("skipped_full", enriched_candidate)
                 continue
 
             if not self._has_target_level(enriched_candidate):
                 skipped_level_count += 1
+                self._log_local_candidate("skipped_level", enriched_candidate)
                 continue
 
             if enriched_candidate.event_date is None:
                 skipped_unknown_count += 1
+                self._log_local_candidate("skipped_unknown_date", enriched_candidate)
                 continue
 
             if not today <= enriched_candidate.event_date <= latest_event_date:
                 skipped_date_count += 1
+                self._log_local_candidate("skipped_out_of_range_date", enriched_candidate)
                 continue
 
             accepted_candidates.append(enriched_candidate)
+            self._log_local_candidate("accepted", enriched_candidate)
 
+        self._log_local(
+            "filter_summary accepted=%s skipped_full=%s skipped_date=%s skipped_level=%s skipped_unknown=%s",
+            len(accepted_candidates),
+            skipped_full_count,
+            skipped_date_count,
+            skipped_level_count,
+            skipped_unknown_count,
+        )
         return TennisTournamentFilterResult(
             candidates=accepted_candidates,
             skipped_full_count=skipped_full_count,
@@ -338,6 +359,41 @@ class TennisTournamentSyncService:
 
     def _normalize_text(self, text: str) -> str:
         return re.sub(r"\s+", " ", text).strip()
+
+    def _log_local(self, message: str, *args: object) -> None:
+        if not is_local_env():
+            return
+
+        logger.info("[tennis sync] " + message, *args)
+
+    def _log_local_candidates(
+        self,
+        label: str,
+        candidates: list[TennisTournamentCandidate],
+    ) -> None:
+        if not is_local_env():
+            return
+
+        for candidate in candidates:
+            self._log_local_candidate(label, candidate)
+
+    def _log_local_candidate(
+        self,
+        label: str,
+        candidate: TennisTournamentCandidate,
+    ) -> None:
+        if not is_local_env():
+            return
+
+        logger.info(
+            "[tennis sync] %s url=%s title=%r event_date=%s status=%r raw_text=%r",
+            label,
+            candidate.url,
+            candidate.title,
+            candidate.event_date.isoformat() if candidate.event_date else None,
+            candidate.status_text,
+            candidate.raw_text[:LOCAL_LOG_TEXT_LIMIT],
+        )
 
     def _normalize_tournament_url(self, url: str) -> str | None:
         parsed_url = urlparse(url)

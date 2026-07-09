@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from backend.app.core.config import get_env, is_local_env
 from backend.app.core.database import get_db
 from backend.app.services.deadline_check_service import DeadlineCheckService
+from backend.app.services.tennis_tournament_sync_service import TennisTournamentSyncService
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
@@ -27,6 +28,7 @@ def check_deadlines(
                 detail="Invalid job authorization",
             )
 
+    tennis_summary = TennisTournamentSyncService(db).sync()
     summary = DeadlineCheckService(db).check_all()
     return {
         "checked_count": summary.checked_count,
@@ -35,4 +37,6 @@ def check_deadlines(
         "failed_count": summary.failed_count,
         "html_count": summary.html_count,
         "llm_count": summary.llm_count,
+        "tennis_synced_count": tennis_summary.synced_count,
+        "tennis_created_count": tennis_summary.created_count,
     }

@@ -37,20 +37,40 @@ class RaceRepository:
         *,
         slack_team_id: str,
         slack_channel_id: str,
+        category: str | None = None,
         limit: int = 20,
     ) -> list[Race]:
         statement = (
             select(Race)
             .where(Race.slack_team_id == slack_team_id)
             .where(Race.slack_channel_id == slack_channel_id)
-            .order_by(Race.created_at.desc())
-            .limit(limit)
         )
+        if category is not None:
+            statement = statement.where(Race.category == category)
+
+        statement = statement.order_by(Race.created_at.desc()).limit(limit)
         return list(self.db.scalars(statement))
 
     def list_all(self) -> list[Race]:
         statement = select(Race).order_by(Race.id.asc())
         return list(self.db.scalars(statement))
+
+    def get_by_url_for_slack_channel(
+        self,
+        *,
+        url: str,
+        slack_team_id: str,
+        slack_channel_id: str,
+        category: str,
+    ) -> Race | None:
+        statement = (
+            select(Race)
+            .where(Race.url == url)
+            .where(Race.slack_team_id == slack_team_id)
+            .where(Race.slack_channel_id == slack_channel_id)
+            .where(Race.category == category)
+        )
+        return self.db.scalar(statement)
 
     def delete_by_id_for_slack_channel(
         self,
@@ -58,6 +78,7 @@ class RaceRepository:
         race_id: int,
         slack_team_id: str,
         slack_channel_id: str,
+        category: str | None = None,
     ) -> int:
         try:
             statement = (
@@ -66,6 +87,9 @@ class RaceRepository:
                 .where(Race.slack_team_id == slack_team_id)
                 .where(Race.slack_channel_id == slack_channel_id)
             )
+            if category is not None:
+                statement = statement.where(Race.category == category)
+
             result = self.db.execute(statement)
             self.db.commit()
             return result.rowcount or 0

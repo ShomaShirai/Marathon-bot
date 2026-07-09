@@ -6,6 +6,8 @@ from sqlalchemy.orm import Session
 from backend.app.core.config import get_env
 from backend.app.core.database import get_db
 from backend.app.core.security import verify_slack_signature
+from backend.app.repositories.channel_subscription_repository import ChannelSubscriptionRepository
+from backend.app.services.race_service import CATEGORY_MARATHON, CATEGORY_TENNIS
 from backend.app.services.race_service import InvalidRaceIdError, InvalidRaceUrlError, RaceService
 
 router = APIRouter(prefix="/slack", tags=["slack"])
@@ -21,14 +23,17 @@ async def handle_slack_command(
     request: Request,
     db: Session = Depends(get_db),
 ) -> dict[str, str]:
-    signing_secret = get_env("SLACK_SIGNING_SECRET")
+    body = await request.body()
+    form_data = parse_qs(body.decode("utf-8"), keep_blank_values=True)
+    command = _first_value(form_data, "command")
+
+    signing_secret = _signing_secret_for_command(command)
     if not signing_secret:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="SLACK_SIGNING_SECRET is not configured",
+            detail=f"Signing secret is not configured for command: {command}",
         )
 
-    body = await request.body()
     is_verified = verify_slack_signature(
         signing_secret=signing_secret,
         timestamp=request.headers.get("x-slack-request-timestamp"),
@@ -41,12 +46,19 @@ async def handle_slack_command(
             detail="Invalid Slack signature",
         )
 
-    form_data = parse_qs(body.decode("utf-8"), keep_blank_values=True)
-    command = _first_value(form_data, "command")
     text = _first_value(form_data, "text").strip()
     slack_team_id = _first_value(form_data, "team_id")
     slack_channel_id = _first_value(form_data, "channel_id")
     registered_by = _first_value(form_data, "user_id")
+
+    if command == "/tennis":
+        return _handle_tennis_command(
+            text=text,
+            slack_team_id=slack_team_id,
+            slack_channel_id=slack_channel_id,
+            registered_by=registered_by,
+            db=db,
+        )
 
     if command != "/marathon":
         return {
@@ -63,6 +75,7 @@ async def handle_slack_command(
                 slack_team_id=slack_team_id,
                 slack_channel_id=slack_channel_id,
                 registered_by=registered_by,
+                category=CATEGORY_MARATHON,
             )
         except InvalidRaceUrlError as exc:
             return {
@@ -80,6 +93,7 @@ async def handle_slack_command(
         races = race_service.list_by_slack_channel(
             slack_team_id=slack_team_id,
             slack_channel_id=slack_channel_id,
+            category=CATEGORY_MARATHON,
         )
 
         return {
@@ -95,6 +109,7 @@ async def handle_slack_command(
                 race_id_text=race_id_text,
                 slack_team_id=slack_team_id,
                 slack_channel_id=slack_channel_id,
+                category=CATEGORY_MARATHON,
             )
         except InvalidRaceIdError as exc:
             return {
@@ -116,6 +131,44 @@ async def handle_slack_command(
     return {
         "response_type": "ephemeral",
         "text": "使い方: /marathon add <大会URL>、/marathon list、/marathon remove <race_id>",
+    }
+
+
+def _signing_secret_for_command(command: str) -> str | None:
+    if command == "/tennis":
+        return get_env("SLACK_TENNIS_SIGNING_SECRET")
+
+    return get_env("SLACK_SIGNING_SECRET")
+
+
+def _handle_tennis_command(
+    *,
+    text: str,
+    slack_team_id: str,
+    slack_channel_id: str,
+    registered_by: str,
+    db: Session,
+) -> dict[str, str]:
+    if text == "subscribe":
+        _, created = ChannelSubscriptionRepository(db).get_or_create(
+            slack_team_id=slack_team_id,
+            slack_channel_id=slack_channel_id,
+            category=CATEGORY_TENNIS,
+            registered_by=registered_by,
+        )
+        if created:
+            message = "このチャンネルをテニス大会の締切通知先として登録しました。"
+        else:
+            message = "このチャンネルは既にテニス大会の締切通知先として登録済みです。"
+
+        return {
+            "response_type": "ephemeral",
+            "text": message,
+        }
+
+    return {
+        "response_type": "ephemeral",
+        "text": "使い方: /tennis subscribe",
     }
 
 

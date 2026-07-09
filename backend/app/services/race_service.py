@@ -26,6 +26,8 @@ JST = ZoneInfo("Asia/Tokyo")
 PAGE_STATUS_AVAILABLE = "available"
 PAGE_STATUS_PENDING = "pending"
 PAGE_STATUS_ERROR = "error"
+CATEGORY_MARATHON = "marathon"
+CATEGORY_TENNIS = "tennis"
 
 
 @dataclass(frozen=True)
@@ -64,6 +66,7 @@ class RaceService:
         slack_team_id: str,
         slack_channel_id: str,
         registered_by: str,
+        category: str = CATEGORY_MARATHON,
     ) -> Race:
         normalized_url, source_domain = self._normalize_url(url)
         checked_at = datetime.now(UTC)
@@ -73,6 +76,7 @@ class RaceService:
         race = Race(
             slack_team_id=slack_team_id,
             slack_channel_id=slack_channel_id,
+            category=category,
             registered_by=registered_by,
             title=title,
             url=normalized_url,
@@ -107,12 +111,30 @@ class RaceService:
         *,
         slack_team_id: str,
         slack_channel_id: str,
+        category: str | None = None,
         limit: int = 20,
     ) -> list[Race]:
         return self.repository.list_by_slack_channel(
             slack_team_id=slack_team_id,
             slack_channel_id=slack_channel_id,
+            category=category,
             limit=limit,
+        )
+
+    def get_by_url_for_slack_channel(
+        self,
+        *,
+        url: str,
+        slack_team_id: str,
+        slack_channel_id: str,
+        category: str,
+    ) -> Race | None:
+        normalized_url, _ = self._normalize_url(url)
+        return self.repository.get_by_url_for_slack_channel(
+            url=normalized_url,
+            slack_team_id=slack_team_id,
+            slack_channel_id=slack_channel_id,
+            category=category,
         )
 
     def remove_by_id_for_slack_channel(
@@ -121,12 +143,14 @@ class RaceService:
         race_id_text: str,
         slack_team_id: str,
         slack_channel_id: str,
+        category: str | None = None,
     ) -> bool:
         race_id = self._parse_race_id(race_id_text)
         deleted_count = self.repository.delete_by_id_for_slack_channel(
             race_id=race_id,
             slack_team_id=slack_team_id,
             slack_channel_id=slack_channel_id,
+            category=category,
         )
         return deleted_count > 0
 

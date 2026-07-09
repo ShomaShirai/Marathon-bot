@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, String, Text, func
+from sqlalchemy import DateTime, String, Text, func, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.app.core.database import Base
@@ -14,6 +14,13 @@ class Race(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     slack_team_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     slack_channel_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    category: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        index=True,
+        default="marathon",
+        server_default=text("'marathon'"),
+    )
     registered_by: Mapped[str] = mapped_column(String(255), nullable=False)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     url: Mapped[str] = mapped_column(Text, nullable=False)

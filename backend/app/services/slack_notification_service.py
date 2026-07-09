@@ -2,6 +2,7 @@ import requests
 
 from backend.app.core.config import get_env
 from backend.app.models.race import Race
+from backend.app.services.race_service import CATEGORY_TENNIS
 
 SLACK_POST_MESSAGE_URL = "https://slack.com/api/chat.postMessage"
 SLACK_REQUEST_TIMEOUT_SECONDS = 10
@@ -13,7 +14,8 @@ class SlackNotificationError(RuntimeError):
 
 class SlackNotificationService:
     def __init__(self) -> None:
-        self.bot_token = get_env("SLACK_BOT_TOKEN")
+        self.marathon_bot_token = get_env("SLACK_BOT_TOKEN")
+        self.tennis_bot_token = get_env("SLACK_TENNIS_BOT_TOKEN")
 
     def send_race_notification(
         self,
@@ -21,13 +23,15 @@ class SlackNotificationService:
         race: Race,
         notification_type: str,
     ) -> None:
-        if not self.bot_token:
-            raise SlackNotificationError("SLACK_BOT_TOKEN is not configured")
+        bot_token = self._bot_token_for_race(race)
+        if not bot_token:
+            env_name = "SLACK_TENNIS_BOT_TOKEN" if race.category == CATEGORY_TENNIS else "SLACK_BOT_TOKEN"
+            raise SlackNotificationError(f"{env_name} is not configured")
 
         response = requests.post(
             SLACK_POST_MESSAGE_URL,
             headers={
-                "Authorization": f"Bearer {self.bot_token}",
+                "Authorization": f"Bearer {bot_token}",
                 "Content-Type": "application/json; charset=utf-8",
             },
             json={
@@ -50,6 +54,7 @@ class SlackNotificationService:
     ) -> str:
         title = race.title
         url = race.url
+        race_label = "テニス大会" if race.category == CATEGORY_TENNIS else "マラソン大会"
         start_text = race.entry_start_at.date().isoformat() if race.entry_start_at else "未検出"
         deadline_text = race.entry_deadline.date().isoformat() if race.entry_deadline else "未検出"
 
@@ -70,14 +75,20 @@ class SlackNotificationService:
         elif notification_type == "entry_deadline_7_days_before":
             heading = "エントリー締切まであと1週間です。"
         else:
-            heading = "マラソン大会の更新があります。"
+            heading = f"{race_label}の更新があります。"
 
         return "\n".join(
             [
                 heading,
-                f"大会: {title}",
+                f"{race_label}: {title}",
                 f"エントリー開始: {start_text}",
                 f"締切: {deadline_text}",
                 url,
             ]
         )
+
+    def _bot_token_for_race(self, race: Race) -> str | None:
+        if race.category == CATEGORY_TENNIS:
+            return self.tennis_bot_token
+
+        return self.marathon_bot_token

@@ -97,6 +97,7 @@ Slack App では以下を使います。
 /marathon list
 /marathon remove <race_id>
 /tennis subscribe
+/tennis list
 ```
 
 MVP では、まず `/marathon add <大会URL>` を優先します。`add` はURLからページタイトルとドメインを取得し、`races` に保存します。登録されたチャンネルに対して、締め切り検出や締め切り前通知を送信します。

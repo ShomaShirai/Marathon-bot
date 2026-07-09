@@ -63,6 +63,8 @@ async def handle_slack_command(
             slack_team_id=slack_team_id,
             slack_channel_id=slack_channel_id,
             registered_by=registered_by,
+            response_url=response_url,
+            background_tasks=background_tasks,
             db=db,
         )
 
@@ -97,10 +99,12 @@ async def handle_slack_command(
     if text == "list":
         if response_url:
             background_tasks.add_task(
-                _send_marathon_list_response,
+                _send_list_response,
                 response_url=response_url,
                 slack_team_id=slack_team_id,
                 slack_channel_id=slack_channel_id,
+                category=CATEGORY_MARATHON,
+                error_message="登録済み大会の取得に失敗しました。時間をおいて再度お試しください。",
             )
             return {
                 "response_type": "ephemeral",
@@ -151,11 +155,13 @@ async def handle_slack_command(
     }
 
 
-def _send_marathon_list_response(
+def _send_list_response(
     *,
     response_url: str,
     slack_team_id: str,
     slack_channel_id: str,
+    category: str,
+    error_message: str,
 ) -> None:
     db = SessionLocal()
     try:
@@ -163,12 +169,12 @@ def _send_marathon_list_response(
         races = race_service.list_by_slack_channel(
             slack_team_id=slack_team_id,
             slack_channel_id=slack_channel_id,
-            category=CATEGORY_MARATHON,
+            category=category,
         )
         text = _build_list_response_text(races)
     except Exception as exc:
-        logger.warning("failed to build marathon list response error=%s", exc)
-        text = "登録済み大会の取得に失敗しました。時間をおいて再度お試しください。"
+        logger.warning("failed to build list response category=%s error=%s", category, exc)
+        text = error_message
     finally:
         db.close()
 
@@ -199,6 +205,8 @@ def _handle_tennis_command(
     slack_team_id: str,
     slack_channel_id: str,
     registered_by: str,
+    response_url: str,
+    background_tasks: BackgroundTasks,
     db: Session,
 ) -> dict[str, str]:
     if text == "subscribe":
@@ -218,9 +226,35 @@ def _handle_tennis_command(
             "text": message,
         }
 
+    if text == "list":
+        if response_url:
+            background_tasks.add_task(
+                _send_list_response,
+                response_url=response_url,
+                slack_team_id=slack_team_id,
+                slack_channel_id=slack_channel_id,
+                category=CATEGORY_TENNIS,
+                error_message="登録済みテニス大会の取得に失敗しました。時間をおいて再度お試しください。",
+            )
+            return {
+                "response_type": "ephemeral",
+                "text": "登録済みのテニス大会を取得しています。",
+            }
+
+        race_service = RaceService(db)
+        races = race_service.list_by_slack_channel(
+            slack_team_id=slack_team_id,
+            slack_channel_id=slack_channel_id,
+            category=CATEGORY_TENNIS,
+        )
+        return {
+            "response_type": "ephemeral",
+            "text": _build_list_response_text(races),
+        }
+
     return {
         "response_type": "ephemeral",
-        "text": "使い方: /tennis subscribe",
+        "text": "使い方: /tennis subscribe、/tennis list",
     }
 
 

@@ -1,44 +1,47 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 import logging
 import re
 from typing import Any
-from urllib.parse import urljoin, urlparse, urlunparse
+from urllib.parse import urljoin
 from zoneinfo import ZoneInfo
 
+from bs4 import BeautifulSoup, Tag
 from sqlalchemy.orm import Session
 
 from backend.app.core.config import is_local_env
 from backend.app.repositories.channel_subscription_repository import ChannelSubscriptionRepository
 from backend.app.services.race_service import CATEGORY_TENNIS, RaceService
-from backend.app.services.scraping_service import ScrapingService
-from backend.app.services.scraping_service import USER_AGENT
 
 logger = logging.getLogger(__name__)
 
-TENNIS_TOURNAMENT_SOURCE_URL = "https://www.tennisbear.net/tournament/prefecture/pref12"
-TENNISBEAR_HOSTS = {"www.tennisbear.net", "tennisbear.net"}
-NAVIGATION_TIMEOUT_MS = 15000
-TOURNAMENT_DETAIL_PATH_PATTERN = re.compile(r"^/tournament/[^/]+")
-NON_DETAIL_TOURNAMENT_PATH_PREFIXES = (
-    "/tournament/prefecture",
-    "/tournament/region",
-    "/tournament/ranking",
-)
+TENNIS_BEAR_BASE_URL = "https://www.tennisbear.net"
+TENNIS_TOURNAMENT_SOURCE_URL = f"{TENNIS_BEAR_BASE_URL}/tournament/prefecture/pref12"
+NAVIGATION_TIMEOUT_MS = 60000
 JST = ZoneInfo("Asia/Tokyo")
+TENNIS_USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+)
 TARGET_LEVEL_KEYWORDS = ("初中級", "初級", "初心者", "初級者", "初中級者")
 FULL_TOURNAMENT_KEYWORDS = ("満員", "キャンセル待ち", "募集終了")
-TOURNAMENT_LOOKAHEAD_DAYS = 90
-MAX_DETAIL_ENRICHMENT_COUNT = 20
-LOCAL_LOG_TEXT_LIMIT = 500
-DATE_PATTERNS = (
-    re.compile(r"(?P<year>\d{4})\s*年\s*(?P<month>\d{1,2})\s*月\s*(?P<day>\d{1,2})\s*日"),
-    re.compile(r"(?P<year>\d{4})[/-](?P<month>\d{1,2})[/-](?P<day>\d{1,2})"),
-    re.compile(r"(?<!\d)(?P<month>\d{1,2})\s*月\s*(?P<day>\d{1,2})\s*日"),
-    re.compile(r"(?<!\d)(?P<month>\d{1,2})[/-](?P<day>\d{1,2})(?!\d)"),
+EXCLUDE_EVENT_KEYWORDS = (
+    "Pickleball",
+    "PICKLEBALL",
+    "pickleball",
+    "ピックルボール",
+    "グリーンボール",
+    "女子",
+    "小学生",
+    "中学生",
 )
+WAIT_KEYWORDS = TARGET_LEVEL_KEYWORDS + FULL_TOURNAMENT_KEYWORDS
+LOCAL_LOG_TEXT_LIMIT = 500
+EVENT_HREF_PATTERN = re.compile(r"^/event/\d+/info$")
+EVENT_DATE_PATTERN = re.compile(r"(?P<month>\d{1,2})/(?P<day>\d{1,2})(?:\([^)]+\))?")
+EVENT_TIME_PATTERN = re.compile(r"(?P<hour>\d{1,2}):(?P<minute>\d{2})")
 
 
 @dataclass(frozen=True)
@@ -58,6 +61,8 @@ class TennisTournamentCandidate:
     event_date: date | None
     status_text: str | None
     raw_text: str
+    level: str | None = None
+    location: str | None = None
 
 
 @dataclass(frozen=True)
@@ -73,7 +78,6 @@ class TennisTournamentSyncService:
     def __init__(self, db: Session) -> None:
         self.subscription_repository = ChannelSubscriptionRepository(db)
         self.race_service = RaceService(db)
-        self.scraping_service = ScrapingService()
 
     def sync(self) -> TennisTournamentSyncSummary:
         subscriptions = self.subscription_repository.list_by_category(category=CATEGORY_TENNIS)
@@ -131,75 +135,95 @@ class TennisTournamentSyncService:
         return self._filter_tournament_candidates(candidates)
 
     def _fetch_tournament_candidates_with_playwright(self) -> list[TennisTournamentCandidate]:
+        from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
         from playwright.sync_api import sync_playwright
 
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=True)
             try:
-                page = browser.new_page(user_agent=USER_AGENT)
-                page.set_default_timeout(NAVIGATION_TIMEOUT_MS)
-                page.goto(TENNIS_TOURNAMENT_SOURCE_URL, wait_until="networkidle", timeout=NAVIGATION_TIMEOUT_MS)
-                raw_candidates = page.evaluate(
-                    """
-                    () => Array.from(document.querySelectorAll("a[href]"))
-                        .map((anchor) => {
-                            const containers = [
-                                anchor.closest("article"),
-                                anchor.closest("li"),
-                                anchor.closest("[class*='card']"),
-                                anchor.closest("[class*='Card']"),
-                                anchor.closest("[class*='tournament']"),
-                                anchor.closest("[class*='Tournament']"),
-                                anchor.parentElement,
-                            ].filter(Boolean);
-                            const container = containers
-                                .sort((a, b) => (a.innerText || "").length - (b.innerText || "").length)[0] || anchor;
-                            return {
-                                href: anchor.getAttribute("href") || "",
-                                title: (anchor.innerText || anchor.getAttribute("aria-label") || "").trim(),
-                                text: (container.innerText || anchor.innerText || "").trim(),
-                            };
-                        })
-                    """
+                context = browser.new_context(
+                    locale="ja-JP",
+                    timezone_id="Asia/Tokyo",
+                    viewport={"width": 1440, "height": 1200},
+                    user_agent=TENNIS_USER_AGENT,
                 )
+                page = context.new_page()
+                if is_local_env():
+                    page.on("response", self._log_local_browser_response)
+                page.set_default_timeout(NAVIGATION_TIMEOUT_MS)
+
+                response = page.goto(
+                    TENNIS_TOURNAMENT_SOURCE_URL,
+                    wait_until="domcontentloaded",
+                    timeout=NAVIGATION_TIMEOUT_MS,
+                )
+                self._log_local(
+                    "document response status=%s final_url=%s",
+                    response.status if response else "",
+                    page.url,
+                )
+                self._wait_for_rendered_content(page=page, timeout_error=PlaywrightTimeoutError)
+                self._scroll_to_load_more(page)
+                html = page.content()
+                self._diagnose_rendered_html(html)
+                context.close()
             finally:
                 browser.close()
 
-        return self._select_tournament_candidates(raw_candidates)
+        return self._extract_candidates_from_html(html)
 
-    def _select_tournament_candidates(self, raw_candidates: Any) -> list[TennisTournamentCandidate]:
+    def _extract_candidates_from_html(self, html: str) -> list[TennisTournamentCandidate]:
         candidates: list[TennisTournamentCandidate] = []
         seen_urls: set[str] = set()
-        if not isinstance(raw_candidates, list):
-            return candidates
+        soup = BeautifulSoup(html, "html.parser")
+        anchors = soup.find_all("a", href=lambda href: href and EVENT_HREF_PATTERN.match(href))
+        self._log_local("event_info_anchor_count=%s", len(anchors))
 
-        for raw_candidate in raw_candidates:
-            if not isinstance(raw_candidate, dict):
+        for anchor in anchors:
+            if not isinstance(anchor, Tag):
                 continue
 
-            raw_href = str(raw_candidate.get("href") or "")
-            absolute_url = urljoin(TENNIS_TOURNAMENT_SOURCE_URL, raw_href)
-            normalized_url = self._normalize_tournament_url(absolute_url)
-            if normalized_url is None or normalized_url in seen_urls:
+            candidate = self._parse_event_anchor(anchor)
+            if candidate is None:
+                continue
+            if candidate.url in seen_urls:
+                self._log_local_candidate("skipped_duplicate", candidate)
                 continue
 
-            raw_text_value = str(raw_candidate.get("text") or "")
-            raw_text = self._normalize_text(raw_text_value)
-            anchor_title = self._normalize_text(str(raw_candidate.get("title") or ""))
-            text_title = self._select_title_from_text(raw_text_value)
-            title = self._select_candidate_title(anchor_title=anchor_title, text_title=text_title)
-            seen_urls.add(normalized_url)
-            candidates.append(
-                TennisTournamentCandidate(
-                    url=normalized_url,
-                    title=title,
-                    event_date=self._detect_event_date(raw_text),
-                    status_text=self._detect_status_text(raw_text),
-                    raw_text=raw_text,
-                )
-            )
+            seen_urls.add(candidate.url)
+            candidates.append(candidate)
 
         return candidates
+
+    def _parse_event_anchor(self, anchor: Tag) -> TennisTournamentCandidate | None:
+        href = str(anchor.get("href") or "")
+        if not EVENT_HREF_PATTERN.match(href):
+            return None
+
+        raw_text = self._normalize_text(anchor.get_text(" ", strip=True))
+        columns = self._get_direct_column_texts(anchor)
+        if len(columns) < 4:
+            self._log_local("skip invalid_column_count href=%s text=%r", href, raw_text[:160])
+            return None
+
+        date_text = columns[1][0] if len(columns[1]) >= 1 else ""
+        time_text = columns[1][1] if len(columns[1]) >= 2 else ""
+        title, location = self._parse_title_and_location(columns[2])
+        level = self._normalize_text(" ".join(columns[3]))
+        event_datetime = self._parse_event_datetime(date_text=date_text, time_text=time_text)
+        if event_datetime is None:
+            self._log_local("skip datetime_parse_failed href=%s text=%r", href, raw_text[:160])
+            return None
+
+        return TennisTournamentCandidate(
+            url=urljoin(TENNIS_BEAR_BASE_URL, href),
+            title=title,
+            event_date=event_datetime.date(),
+            status_text=self._detect_status_text(raw_text),
+            raw_text=raw_text,
+            level=level,
+            location=location,
+        )
 
     def _filter_tournament_candidates(
         self,
@@ -210,21 +234,20 @@ class TennisTournamentSyncService:
         skipped_date_count = 0
         skipped_level_count = 0
         skipped_unknown_count = 0
-        detail_enrichment_count = 0
         today = datetime.now(JST).date()
-        latest_event_date = today + timedelta(days=TOURNAMENT_LOOKAHEAD_DAYS)
+        latest_event_date = self._add_months(today, 3)
 
         for candidate in candidates:
             enriched_candidate = candidate
-            if self._needs_detail_enrichment(candidate) and detail_enrichment_count < MAX_DETAIL_ENRICHMENT_COUNT:
-                self._log_local_candidate("enriching", candidate)
-                enriched_candidate = self._enrich_candidate_from_detail(candidate)
-                self._log_local_candidate("enriched", enriched_candidate)
-                detail_enrichment_count += 1
 
             if self._is_full_or_closed(enriched_candidate):
                 skipped_full_count += 1
                 self._log_local_candidate("skipped_full", enriched_candidate)
+                continue
+
+            if self._has_excluded_keyword(enriched_candidate):
+                skipped_level_count += 1
+                self._log_local_candidate("skipped_excluded_keyword", enriched_candidate)
                 continue
 
             if not self._has_target_level(enriched_candidate):
@@ -261,33 +284,17 @@ class TennisTournamentSyncService:
             skipped_unknown_count=skipped_unknown_count,
         )
 
-    def _needs_detail_enrichment(self, candidate: TennisTournamentCandidate) -> bool:
-        return candidate.event_date is None or candidate.title is None or not candidate.raw_text
-
-    def _enrich_candidate_from_detail(self, candidate: TennisTournamentCandidate) -> TennisTournamentCandidate:
-        try:
-            metadata = self.scraping_service.fetch_metadata(candidate.url)
-        except Exception as exc:
-            logger.warning("tennis tournament detail enrichment failed url=%s error=%s", candidate.url, exc)
-            return candidate
-
-        detail_text = self._normalize_text(" ".join(part for part in (metadata.title, metadata.text) if part))
-        raw_text = self._normalize_text(" ".join(part for part in (candidate.raw_text, detail_text) if part))
-        return TennisTournamentCandidate(
-            url=candidate.url,
-            title=candidate.title or self._select_title_from_text(raw_text) or metadata.title,
-            event_date=candidate.event_date or self._detect_event_date(raw_text),
-            status_text=candidate.status_text or self._detect_status_text(raw_text),
-            raw_text=raw_text,
-        )
-
     def _is_full_or_closed(self, candidate: TennisTournamentCandidate) -> bool:
         text = self._candidate_text(candidate)
         return any(keyword in text for keyword in FULL_TOURNAMENT_KEYWORDS)
 
     def _has_target_level(self, candidate: TennisTournamentCandidate) -> bool:
-        title = candidate.title or self._select_title_from_text(candidate.raw_text) or ""
-        return self._contains_target_level(title)
+        text = self._candidate_text(candidate)
+        return self._contains_target_level(text)
+
+    def _has_excluded_keyword(self, candidate: TennisTournamentCandidate) -> bool:
+        text = self._candidate_text(candidate)
+        return any(keyword in text for keyword in EXCLUDE_EVENT_KEYWORDS)
 
     def _detect_status_text(self, text: str) -> str | None:
         for keyword in FULL_TOURNAMENT_KEYWORDS:
@@ -296,66 +303,164 @@ class TennisTournamentSyncService:
 
         return None
 
-    def _detect_event_date(self, text: str) -> date | None:
-        now = datetime.now(JST).date()
-        for pattern in DATE_PATTERNS:
-            for match in pattern.finditer(text):
-                event_date = self._build_event_date(match=match, today=now)
-                if event_date is not None:
-                    return event_date
-
-        return None
-
-    def _build_event_date(self, *, match: re.Match[str], today: date) -> date | None:
-        try:
-            year = int(match.groupdict().get("year") or today.year)
-            month = int(match.group("month"))
-            day = int(match.group("day"))
-            event_date = date(year, month, day)
-        except (ValueError, IndexError):
-            return None
-
-        if "year" not in match.groupdict() and event_date < today:
-            try:
-                event_date = date(today.year + 1, month, day)
-            except ValueError:
-                return None
-
-        return event_date
-
     def _candidate_text(self, candidate: TennisTournamentCandidate) -> str:
-        return " ".join(part for part in (candidate.title, candidate.status_text, candidate.raw_text) if part)
-
-    def _select_candidate_title(
-        self,
-        *,
-        anchor_title: str | None,
-        text_title: str | None,
-    ) -> str | None:
-        if text_title and self._contains_target_level(text_title):
-            return text_title
-        if anchor_title:
-            return anchor_title
-
-        return text_title
-
-    def _select_title_from_text(self, text: str) -> str | None:
-        fallback_line: str | None = None
-        for line in re.split(r"[\r\n]+", text):
-            normalized_line = self._normalize_text(line)
-            if not normalized_line:
-                continue
-
-            if fallback_line is None:
-                fallback_line = normalized_line[:255]
-
-            if self._contains_target_level(normalized_line):
-                return normalized_line[:255]
-
-        return fallback_line
+        return " ".join(
+            part
+            for part in (
+                candidate.title,
+                candidate.status_text,
+                candidate.level,
+                candidate.location,
+                candidate.raw_text,
+            )
+            if part
+        )
 
     def _contains_target_level(self, text: str) -> bool:
         return any(keyword in text for keyword in TARGET_LEVEL_KEYWORDS)
+
+    def _get_direct_column_texts(self, anchor: Tag) -> list[list[str]]:
+        row = anchor.find("div", class_=lambda value: value and "row" in value.split())
+        if not isinstance(row, Tag):
+            return []
+
+        columns: list[list[str]] = []
+        for child in row.children:
+            if not isinstance(child, Tag):
+                continue
+
+            texts = [self._normalize_text(text) for text in child.stripped_strings]
+            columns.append([text for text in texts if text])
+
+        return columns
+
+    def _parse_title_and_location(self, detail_texts: list[str]) -> tuple[str, str]:
+        for index, text in enumerate(detail_texts):
+            if text.startswith("千葉県"):
+                title = detail_texts[index - 1] if index > 0 else ""
+                return title, text
+        if len(detail_texts) >= 2:
+            return detail_texts[-1], ""
+        if len(detail_texts) == 1:
+            return detail_texts[0], ""
+
+        return "", ""
+
+    def _parse_event_datetime(
+        self,
+        *,
+        date_text: str,
+        time_text: str,
+        today: date | None = None,
+    ) -> datetime | None:
+        today = today or datetime.now(JST).date()
+        date_match = EVENT_DATE_PATTERN.search(date_text)
+        time_match = EVENT_TIME_PATTERN.search(time_text)
+        if not date_match or not time_match:
+            return None
+
+        month = int(date_match.group("month"))
+        day = int(date_match.group("day"))
+        hour = int(time_match.group("hour"))
+        minute = int(time_match.group("minute"))
+        year = today.year
+
+        try:
+            event_date = date(year, month, day)
+        except ValueError:
+            return None
+
+        if event_date < today:
+            try:
+                event_date = date(year + 1, month, day)
+            except ValueError:
+                return None
+
+        return datetime(
+            event_date.year,
+            event_date.month,
+            event_date.day,
+            hour,
+            minute,
+            tzinfo=JST,
+        )
+
+    def _add_months(self, value: date, months: int) -> date:
+        month_index = value.month - 1 + months
+        year = value.year + month_index // 12
+        month = month_index % 12 + 1
+        month_days = (
+            31,
+            29 if year % 400 == 0 or (year % 4 == 0 and year % 100 != 0) else 28,
+            31,
+            30,
+            31,
+            30,
+            31,
+            31,
+            30,
+            31,
+            30,
+            31,
+        )
+        return date(year, month, min(value.day, month_days[month - 1]))
+
+    def _wait_for_rendered_content(self, *, page: Any, timeout_error: Any) -> None:
+        try:
+            page.wait_for_load_state("domcontentloaded", timeout=30000)
+            page.wait_for_load_state("networkidle", timeout=30000)
+        except timeout_error:
+            self._log_local("network idle wait timed out; continuing with current DOM")
+
+        for keyword in WAIT_KEYWORDS:
+            try:
+                page.wait_for_selector(f"text={keyword}", timeout=5000)
+                self._log_local("render keyword found keyword=%s", keyword)
+                return
+            except timeout_error:
+                self._log_local("render keyword not found yet keyword=%s", keyword)
+
+        self._log_local("no target keyword appeared before timeout; continuing for diagnostics")
+
+    def _scroll_to_load_more(self, page: Any, rounds: int = 8) -> None:
+        previous_height = 0
+        stable_rounds = 0
+
+        for index in range(rounds):
+            height = page.evaluate("document.body.scrollHeight")
+            self._log_local("scroll round=%s height=%s", index + 1, height)
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            page.wait_for_timeout(1500)
+
+            new_height = page.evaluate("document.body.scrollHeight")
+            if new_height == previous_height:
+                stable_rounds += 1
+            else:
+                stable_rounds = 0
+
+            previous_height = new_height
+            if stable_rounds >= 2:
+                self._log_local("scroll stopped because page height is stable")
+                break
+
+    def _diagnose_rendered_html(self, html: str) -> None:
+        if not is_local_env():
+            return
+
+        soup = BeautifulSoup(html, "html.parser")
+        text = soup.get_text("\n")
+        self._log_local("rendered html length=%s text_length=%s", len(html), len(text))
+        for keyword in WAIT_KEYWORDS:
+            self._log_local("rendered keyword count keyword=%s count=%s", keyword, text.count(keyword))
+
+        anchors = soup.find_all("a", href=lambda href: href and EVENT_HREF_PATTERN.match(href))
+        self._log_local("rendered event info anchors=%s", len(anchors))
+        for anchor in anchors[:30]:
+            self._log_local(
+                "rendered event link=%s text=%s",
+                anchor["href"],
+                self._normalize_text(anchor.get_text(" ", strip=True))[:160],
+            )
 
     def _normalize_text(self, text: str) -> str:
         return re.sub(r"\s+", " ", text).strip()
@@ -386,36 +491,30 @@ class TennisTournamentSyncService:
             return
 
         logger.info(
-            "[tennis sync] %s url=%s title=%r event_date=%s status=%r raw_text=%r",
+            "[tennis sync] %s url=%s title=%r event_date=%s status=%r level=%r location=%r raw_text=%r",
             label,
             candidate.url,
             candidate.title,
             candidate.event_date.isoformat() if candidate.event_date else None,
             candidate.status_text,
+            candidate.level,
+            candidate.location,
             candidate.raw_text[:LOCAL_LOG_TEXT_LIMIT],
         )
 
-    def _normalize_tournament_url(self, url: str) -> str | None:
-        parsed_url = urlparse(url)
-        if parsed_url.scheme not in {"http", "https"}:
-            return None
-        if parsed_url.hostname not in TENNISBEAR_HOSTS:
-            return None
-        if not self._is_tournament_detail_path(parsed_url.path):
-            return None
+    def _log_local_browser_response(self, response: Any) -> None:
+        if not is_local_env():
+            return
+        if "tennisbear.net" not in response.url:
+            return
 
-        return urlunparse(
-            (
-                "https",
-                "www.tennisbear.net",
-                parsed_url.path.rstrip("/"),
-                "",
-                "",
-                "",
-            )
+        resource_type = response.request.resource_type
+        if resource_type not in {"document", "xhr", "fetch"}:
+            return
+
+        logger.info(
+            "[tennis sync] browser response status=%s type=%s url=%s",
+            response.status,
+            resource_type,
+            response.url,
         )
-
-    def _is_tournament_detail_path(self, path: str) -> bool:
-        if not TOURNAMENT_DETAIL_PATH_PATTERN.match(path):
-            return False
-        return not any(path.startswith(prefix) for prefix in NON_DETAIL_TOURNAMENT_PATH_PREFIXES)

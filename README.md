@@ -389,4 +389,3 @@ make down
 ```bash
 make logs
 ```
-

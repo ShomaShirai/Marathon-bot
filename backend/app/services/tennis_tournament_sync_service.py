@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime
+import hashlib
 import logging
 import re
 from typing import Any
@@ -12,8 +13,11 @@ from bs4 import BeautifulSoup, Tag
 from sqlalchemy.orm import Session
 
 from backend.app.core.config import is_local_env
+from backend.app.models.race import Race
 from backend.app.repositories.channel_subscription_repository import ChannelSubscriptionRepository
+from backend.app.repositories.race_repository import RaceRepository
 from backend.app.services.race_service import CATEGORY_TENNIS, RaceService
+from backend.app.services.race_service import PAGE_STATUS_AVAILABLE
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +63,7 @@ class TennisTournamentCandidate:
     url: str
     title: str | None
     event_date: date | None
+    entry_deadline: datetime | None
     status_text: str | None
     raw_text: str
     level: str | None = None
@@ -77,6 +82,7 @@ class TennisTournamentFilterResult:
 class TennisTournamentSyncService:
     def __init__(self, db: Session) -> None:
         self.subscription_repository = ChannelSubscriptionRepository(db)
+        self.race_repository = RaceRepository(db)
         self.race_service = RaceService(db)
 
     def sync(self) -> TennisTournamentSyncSummary:
@@ -97,14 +103,14 @@ class TennisTournamentSyncService:
                     category=CATEGORY_TENNIS,
                 )
                 if existing is not None:
+                    self._update_existing_race_from_candidate(race=existing, candidate=candidate)
                     continue
 
-                self.race_service.register_from_url(
-                    url=candidate.url,
+                self._create_race_from_candidate(
+                    candidate=candidate,
                     slack_team_id=subscription.slack_team_id,
                     slack_channel_id=subscription.slack_channel_id,
                     registered_by=subscription.registered_by,
-                    category=CATEGORY_TENNIS,
                 )
                 created_count += 1
 
@@ -219,6 +225,7 @@ class TennisTournamentSyncService:
             url=urljoin(TENNIS_BEAR_BASE_URL, href),
             title=title,
             event_date=event_datetime.date(),
+            entry_deadline=event_datetime,
             status_text=self._detect_status_text(raw_text),
             raw_text=raw_text,
             level=level,
@@ -302,6 +309,102 @@ class TennisTournamentSyncService:
                 return keyword
 
         return None
+
+    def _create_race_from_candidate(
+        self,
+        *,
+        candidate: TennisTournamentCandidate,
+        slack_team_id: str,
+        slack_channel_id: str,
+        registered_by: str,
+    ) -> Race:
+        checked_at = datetime.now(JST)
+        race = Race(
+            slack_team_id=slack_team_id,
+            slack_channel_id=slack_channel_id,
+            category=CATEGORY_TENNIS,
+            registered_by=registered_by,
+            title=(candidate.title or "テニス大会")[:255],
+            url=candidate.url,
+            source_domain="www.tennisbear.net",
+            page_status=PAGE_STATUS_AVAILABLE,
+            entry_start_at=None,
+            entry_deadline=candidate.entry_deadline,
+            entry_status=self._entry_status_for_candidate(candidate),
+            last_checked_at=checked_at,
+            last_content_hash=self._build_content_hash(candidate),
+            last_extraction_method="playwright_html",
+            last_detected_text=candidate.raw_text,
+        )
+        try:
+            self.race_repository.add(race)
+            self.race_repository.commit()
+            self.race_repository.refresh(race)
+            return race
+        except Exception:
+            self.race_repository.rollback()
+            raise
+
+    def _update_existing_race_from_candidate(
+        self,
+        *,
+        race: Race,
+        candidate: TennisTournamentCandidate,
+    ) -> None:
+        new_content_hash = self._build_content_hash(candidate)
+        changed = False
+
+        if candidate.title and race.title != candidate.title[:255]:
+            race.title = candidate.title[:255]
+            changed = True
+        if candidate.entry_deadline is not None and race.entry_deadline != candidate.entry_deadline:
+            race.entry_deadline = candidate.entry_deadline
+            changed = True
+
+        entry_status = self._entry_status_for_candidate(candidate)
+        if race.entry_status != entry_status:
+            race.entry_status = entry_status
+            changed = True
+        if race.last_content_hash != new_content_hash:
+            race.last_content_hash = new_content_hash
+            changed = True
+        if race.last_detected_text != candidate.raw_text:
+            race.last_detected_text = candidate.raw_text
+            changed = True
+        if race.last_extraction_method != "playwright_html":
+            race.last_extraction_method = "playwright_html"
+            changed = True
+        if race.page_status != PAGE_STATUS_AVAILABLE:
+            race.page_status = PAGE_STATUS_AVAILABLE
+            changed = True
+
+        race.last_checked_at = datetime.now(JST)
+        if not changed:
+            return
+
+        try:
+            self.race_repository.commit()
+            self.race_repository.refresh(race)
+        except Exception:
+            self.race_repository.rollback()
+            raise
+
+    def _entry_status_for_candidate(self, candidate: TennisTournamentCandidate) -> str:
+        if candidate.status_text:
+            return "closed"
+
+        return "open"
+
+    def _build_content_hash(self, candidate: TennisTournamentCandidate) -> str:
+        content = "|".join(
+            [
+                candidate.url,
+                candidate.title or "",
+                candidate.entry_deadline.isoformat() if candidate.entry_deadline else "",
+                candidate.raw_text,
+            ]
+        )
+        return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
     def _candidate_text(self, candidate: TennisTournamentCandidate) -> str:
         return " ".join(

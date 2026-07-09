@@ -156,6 +156,18 @@ class RaceService:
 
     def check_registered_race(self, race: Race) -> RaceCheckResult:
         checked_at = datetime.now(UTC)
+        if race.category == CATEGORY_TENNIS and race.last_extraction_method == "playwright_html":
+            race.last_checked_at = checked_at
+            self.repository.commit()
+            self.repository.refresh(race)
+            return RaceCheckResult(
+                race=race,
+                changed=False,
+                schedule_changed=False,
+                failed=False,
+                notification_events=(),
+            )
+
         old_entry_start_at = self._normalize_schedule_datetime(race.entry_start_at)
         old_entry_deadline = self._normalize_schedule_datetime(race.entry_deadline)
         old_entry_status = race.entry_status

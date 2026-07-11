@@ -9,6 +9,7 @@ services:
       APP_ENV: ${APP_ENV:-local}
       PORT: 8000
       DATABASE_URL: ${DATABASE_URL:-sqlite:///./local.db}
+      IS_TENNIS_BOT: ${IS_TENNIS_BOT:-false}
       SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-}
       SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET:-}
       SLACK_TENNIS_BOT_TOKEN: ${SLACK_TENNIS_BOT_TOKEN:-}

@@ -11,3 +11,8 @@ def get_app_env() -> str:
 
 def is_local_env() -> bool:
     return get_app_env() == "local"
+
+
+def is_tennis_bot_enabled() -> bool:
+    value = get_env("IS_TENNIS_BOT", "false")
+    return value.lower() in {"true", "1", "yes", "on"} if value else False

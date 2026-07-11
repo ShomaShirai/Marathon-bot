@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy.orm import Session
 
-from backend.app.core.config import get_env, is_local_env
+from backend.app.core.config import get_env, is_local_env, is_tennis_bot_enabled
 from backend.app.core.database import get_db
 from backend.app.services.deadline_check_service import DeadlineCheckService
 from backend.app.services.tennis_tournament_sync_service import TennisTournamentSyncService
@@ -28,8 +28,13 @@ def check_deadlines(
                 detail="Invalid job authorization",
             )
 
-    tennis_summary = TennisTournamentSyncService(db).sync()
-    summary = DeadlineCheckService(db).check_all()
+    include_tennis = is_tennis_bot_enabled()
+    if include_tennis:
+        tennis_summary = TennisTournamentSyncService(db).sync()
+    else:
+        tennis_summary = TennisTournamentSyncService.empty_summary()
+
+    summary = DeadlineCheckService(db).check_all(include_tennis=include_tennis)
     return {
         "checked_count": summary.checked_count,
         "updated_count": summary.updated_count,

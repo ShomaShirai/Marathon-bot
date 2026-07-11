@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from backend.app.models.race import Race
 from backend.app.repositories.notification_repository import NotificationRepository
 from backend.app.repositories.race_repository import RaceRepository
+from backend.app.services.race_service import CATEGORY_TENNIS
 from backend.app.services.race_service import RaceService
 from backend.app.services.slack_notification_service import SlackNotificationService
 
@@ -50,9 +51,18 @@ class DeadlineCheckService:
         self.race_service = RaceService(db)
         self.slack_notification_service = SlackNotificationService()
 
-    def check_all(self, *, today: date | None = None) -> DeadlineCheckSummary:
+    def check_all(
+        self,
+        *,
+        today: date | None = None,
+        include_tennis: bool = True,
+    ) -> DeadlineCheckSummary:
         current_date = today or datetime.now(JST).date()
-        races = self.race_repository.list_all()
+        races = [
+            race
+            for race in self.race_repository.list_all()
+            if include_tennis or race.category != CATEGORY_TENNIS
+        ]
         checked_count = 0
         updated_count = 0
         notified_count = 0

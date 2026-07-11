@@ -219,6 +219,8 @@ GitHub Actions には以下の Secrets を設定します。
 - `APP_BASE_URL`: Render 上のアプリURL
 - `JOB_SECRET`: アプリ側の `JOB_SECRET` と同じ値
 
+テニス大会通知は `IS_TENNIS_BOT` で制御します。未設定または `false` の場合、`/jobs/check-deadlines` はテニス大会の同期、チェック、Slack通知を行いません。`true`, `1`, `yes`, `on` のいずれかを設定した場合のみ、テニス大会の同期と通知を実行します。
+
 想定頻度:
 
 - MVP: 4日に1回
@@ -387,4 +389,3 @@ make down
 ```bash
 make logs
 ```
-

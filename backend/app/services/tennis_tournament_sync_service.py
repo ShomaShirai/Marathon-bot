@@ -85,6 +85,10 @@ class TennisTournamentSyncService:
         self.race_repository = RaceRepository(db)
         self.race_service = RaceService(db)
 
+    @staticmethod
+    def empty_summary() -> TennisTournamentSyncSummary:
+        return TennisTournamentSyncSummary(synced_count=0, created_count=0)
+
     def sync(self) -> TennisTournamentSyncSummary:
         subscriptions = self.subscription_repository.list_by_category(category=CATEGORY_TENNIS)
         self._log_local("subscription_count=%s", len(subscriptions))
